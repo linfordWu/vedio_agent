@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>短视频工厂 · 工作台</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">▣</span>
+    <span class="brand-name">短视频工厂</span>
+    <span class="brand-sub">FACTORY CONSOLE</span>
+  </div>
+  <div class="topbar-right">
+    <span id="sse-indicator" class="sse-indicator sse-off" title="事件流连接状态">● 事件流:未连接</span>
+    <span id="current-project-label" class="current-project-label">未选择项目</span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="tab-project">项目与素材</button>
+  <button class="tab-btn" data-tab="tab-shots">分镜镜头</button>
+  <button class="tab-btn" data-tab="tab-generate">视频生成</button>
+  <button class="tab-btn" data-tab="tab-monitor">任务监控与审核</button>
+</nav>
+
+<main class="main">
+
+  <!-- ============ 页签一:项目与素材 ============ -->
+  <section id="tab-project" class="tab-pane active">
+    <div class="pane-grid">
+      <div class="panel">
+        <h2 class="panel-title">创建项目</h2>
+        <form id="create-project-form" class="form">
+          <label>项目标题
+            <input type="text" name="title" required placeholder="例如:夏日冰饮 15s 种草短视频">
+          </label>
+          <label>风格
+            <input type="text" name="style" placeholder="例如:清新 / 快节奏 / 电影感">
+          </label>
+          <label>创意简报
+            <textarea name="brief" rows="4" placeholder="目标受众、卖点、调性、必须出现的元素…"></textarea>
+          </label>
+          <label>目标时长(秒)
+            <input type="number" name="duration_target_s" min="1" value="15">
+          </label>
+          <button type="submit" class="btn btn-primary">创建项目</button>
+        </form>
+
+        <h2 class="panel-title" style="margin-top:24px">打开已有项目</h2>
+        <div class="form-inline">
+          <input type="text" id="open-project-id" placeholder="输入项目 ID">
+          <button id="open-project-btn" class="btn">加载</button>
+        </div>
+        <ul id="recent-projects" class="recent-projects"></ul>
+
+        <div id="project-summary" class="project-summary hidden"></div>
+        <button id="plan-btn" class="btn btn-accent hidden">生成剧本分镜(异步)</button>
+      </div>
+
+      <div class="panel">
+        <h2 class="panel-title">素材上传</h2>
+        <div id="dropzone" class="dropzone">
+          <p>拖拽文件到此处,或</p>
+          <input type="file" id="file-input" multiple accept="image/*,video/*">
+          <p class="dropzone-hint">支持多选;图片 / 视频;自动分块上传</p>
+        </div>
+        <ul id="upload-list" class="upload-list"></ul>
+
+        <div class="panel-title-row">
+          <h2 class="panel-title">素材库</h2>
+          <button id="refresh-assets-btn" class="btn btn-small">刷新</button>
+        </div>
+        <div id="asset-grid" class="asset-grid">
+          <p class="empty-hint">暂无素材</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 页签二:分镜镜头 ============ -->
+  <section id="tab-shots" class="tab-pane">
+    <div class="pane-toolbar">
+      <button id="refresh-shots-btn" class="btn">刷新分镜</button>
+      <span class="toolbar-hint">分镜由「项目与素材 → 生成剧本分镜」异步产生</span>
+    </div>
+    <div id="scenes-container" class="scenes-container">
+      <p class="empty-hint">暂无分镜数据,请先加载项目</p>
+    </div>
+  </section>
+
+  <!-- ============ 页签三:视频生成 ============ -->
+  <section id="tab-generate" class="tab-pane">
+    <div class="pane-grid pane-grid-wide-left">
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2 class="panel-title">生成任务(Runs)</h2>
+          <button id="refresh-runs-btn" class="btn btn-small">刷新</button>
+        </div>
+        <div id="run-list" class="run-list">
+          <p class="empty-hint">暂无生成任务</p>
+        </div>
+        <div id="run-detail" class="run-detail hidden"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title-row">
+          <h2 class="panel-title">实时事件流</h2>
+          <button id="clear-events-btn" class="btn btn-small">清空</button>
+        </div>
+        <div id="event-stream" class="event-stream">
+          <p class="empty-hint">等待事件…</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 页签四:任务监控与审核 ============ -->
+  <section id="tab-monitor" class="tab-pane">
+    <div class="pane-toolbar">
+      <button id="refresh-monitor-btn" class="btn">刷新</button>
+      <button id="export-btn" class="btn btn-accent" disabled>导出成片</button>
+      <span id="export-hint" class="toolbar-hint">全部镜头验收通过后可用</span>
+    </div>
+    <table class="run-table">
+      <thead>
+        <tr>
+          <th>Run ID</th><th>镜头</th><th>状态</th><th>评分</th>
+          <th>耗时</th><th>重试</th><th>失败原因</th><th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="monitor-tbody">
+        <tr><td colspan="8" class="empty-hint">暂无任务</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</main>
+
+<div id="toast-container" class="toast-container"></div>
+
+<script src="./app.js"></script>
+</body>
+</html>
