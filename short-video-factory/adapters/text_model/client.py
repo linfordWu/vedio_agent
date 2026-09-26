@@ -33,10 +33,15 @@ def extract_json(text: str) -> dict:
     m = _JSON_BLOCK.search(text or "")
     if not m:
         raise ValueError(f"no JSON object in model reply: {text[:200]!r}")
+    raw = m.group(0)
     try:
-        return json.loads(m.group(0))
-    except json.JSONDecodeError as e:
-        raise ValueError(f"invalid JSON in model reply: {e}") from e
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # 模型常在字符串里输出裸换行/制表符,strict=False 容忍控制字符
+        try:
+            return json.loads(raw, strict=False)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"invalid JSON in model reply: {e}") from e
 
 
 class TextModelClient:
