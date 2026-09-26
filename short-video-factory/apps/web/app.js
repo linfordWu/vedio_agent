@@ -565,9 +565,10 @@ function renderRuns() {
 async function selectRun(runId) {
   state.selectedRunId = runId;
   renderRuns();
-  // 拉取单个 run 的最新详情
+  // 拉取单个 run 的最新详情(接口返回 {run, score_report},需解包)
   try {
-    const detail = await api('/runs/' + encodeURIComponent(runId));
+    const resp = await api('/runs/' + encodeURIComponent(runId));
+    const detail = (resp && resp.run) ? resp.run : resp;
     const runs = getRuns();
     const idx = runs.findIndex((r) => (r.run_id || r.id) === runId);
     if (idx >= 0 && state.project) state.project.runs[idx] = Object.assign({}, runs[idx], detail);
@@ -576,6 +577,13 @@ async function selectRun(runId) {
   } catch (err) {
     toast('获取任务详情失败:' + err.message, 'err');
   }
+}
+
+// 从任务监控页打开某条任务的详情/审核面板(详情面板在「生成」页签内)
+function openRunDetail(runId) {
+  $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === 'tab-generate'));
+  $$('.tab-pane').forEach((p) => p.classList.toggle('active', p.id === 'tab-generate'));
+  selectRun(runId);
 }
 
 function renderRunDetail() {
@@ -859,7 +867,7 @@ function renderMonitor() {
       const failure = run.failure
         ? (typeof run.failure === 'object' ? (run.failure.message || JSON.stringify(run.failure)) : run.failure)
         : '';
-      return '<tr>' +
+      return '<tr class="monitor-row" data-run-id="' + esc(id) + '" title="点击查看详情与审核">' +
         '<td>' + esc(id) + '</td>' +
         '<td>' + esc(run.shot_id || '-') + '</td>' +
         '<td><span class="run-state-pill ' + esc(st) + '">' + esc(st) + '</span></td>' +
@@ -868,6 +876,7 @@ function renderMonitor() {
         '<td>' + esc(run.retry_count != null ? run.retry_count : (run.retries != null ? run.retries : 0)) + '</td>' +
         '<td title="' + esc(failure) + '">' + esc(failure ? String(failure).slice(0, 40) : '-') + '</td>' +
         '<td><div class="ops">' +
+          '<button class="btn btn-small btn-accent open-detail-btn" data-run-id="' + esc(id) + '">详情/审核</button>' +
           '<button class="btn btn-small cmd-btn" data-action="pause" data-run-id="' + esc(id) + '"' + (terminal ? ' disabled' : '') + '>暂停调度</button>' +
           '<button class="btn btn-small cmd-btn" data-action="resume" data-run-id="' + esc(id) + '"' + (terminal ? ' disabled' : '') + '>恢复</button>' +
           '<button class="btn btn-small btn-danger cmd-btn" data-action="cancel" data-run-id="' + esc(id) + '"' + (terminal ? ' disabled' : '') + '>取消</button>' +
@@ -875,7 +884,13 @@ function renderMonitor() {
       '</tr>';
     }).join('');
     tbody.querySelectorAll('.cmd-btn').forEach((btn) => {
-      btn.addEventListener('click', () => sendRunCommand(btn.dataset.runId, btn.dataset.action, btn));
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sendRunCommand(btn.dataset.runId, btn.dataset.action, btn);
+      });
+    });
+    tbody.querySelectorAll('.monitor-row').forEach((row) => {
+      row.addEventListener('click', () => openRunDetail(row.dataset.runId));
     });
   }
   const exportBtn = $('#export-btn');

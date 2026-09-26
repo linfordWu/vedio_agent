@@ -253,6 +253,8 @@ body {
 .run-item:hover { border-color: var(--accent); }
 .run-item.selected { border-color: var(--accent); background: rgba(77,163,255,0.07); }
 .run-item .rid { font-family: var(--mono); color: var(--text-dim); }
+.monitor-row { cursor: pointer; }
+.monitor-row:hover td { background: rgba(77,163,255,0.06); }
 .run-state-pill {
   font-size: 11px; font-family: var(--mono); padding: 2px 8px; border-radius: 10px;
   border: 1px solid var(--border-strong); color: var(--text-dim);
