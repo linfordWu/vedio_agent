@@ -989,6 +989,29 @@ function renderMonitor() {
   const ok = allShotsAccepted();
   exportBtn.disabled = !ok;
   $('#export-hint').textContent = ok ? '全部镜头已验收,可以导出' : '全部镜头验收通过后可用';
+  renderExportResult();
+}
+
+// 成片展示区:列出本项目已导出的成片(derived 视频素材)
+function renderExportResult() {
+  const box = $('#export-result');
+  if (!box) return;
+  const exports = (state.assets || [])
+    .filter((a) => a.source === 'derived' && (a.media_type === 'video' || isVideoAsset(a)));
+  if (!exports.length) { box.innerHTML = ''; return; }
+  box.innerHTML = '<h3>已导出成片(' + exports.length + ')</h3>' + exports.map((a) => {
+    const id = a.asset_id || a.id;
+    const m = a.metadata || {};
+    const name = (a.storage_key || '').split('/').pop() || id;
+    const size = m.size_bytes ? (m.size_bytes / 1048576).toFixed(1) + ' MB' : '';
+    const dur = m.duration ? Math.round(m.duration) + 's' : '';
+    const url = '/assets/' + encodeURIComponent(id) + '/file';
+    return '<div class="export-item">' +
+      '<video src="' + esc(url) + '" controls preload="metadata"></video>' +
+      '<div class="export-meta"><span>' + esc(name) + '</span><span>' + esc(dur) + ' ' + esc(size) + '</span>' +
+      '<a class="btn btn-small" href="' + esc(url) + '" download="' + esc(name) + '">下载</a></div>' +
+    '</div>';
+  }).join('');
 }
 
 async function sendRunCommand(runId, action, btn) {
@@ -1011,13 +1034,23 @@ async function sendRunCommand(runId, action, btn) {
 
 $('#export-btn').addEventListener('click', async () => {
   if (!state.currentProjectId) return;
+  const btn = $('#export-btn');
+  btn.disabled = true;
+  btn.textContent = '导出中…';
   try {
     const res = await api('/projects/' + encodeURIComponent(state.currentProjectId) + '/export', {
       method: 'POST', json: {},
     });
-    toast('导出任务已触发' + (res.export_id ? ': ' + res.export_id : ''), 'ok');
+    const asset = res.asset || {};
+    const aid = asset.asset_id || res.export_id || '';
+    toast('导出成功' + (aid ? ': ' + aid : ''), 'ok');
+    await refreshAssets();
+    renderMonitor();
   } catch (err) {
     toast('导出失败:' + err.message, 'err');
+  } finally {
+    btn.textContent = '导出成片';
+    btn.disabled = !allShotsAccepted();
   }
 });
 

@@ -294,6 +294,15 @@ body {
 .review-card-head { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 12px; color: var(--text-dim); }
 .review-card-head .rid { font-family: var(--mono); }
 .run-state-pill.HUMAN_REVIEW { border-color: var(--warn); color: var(--warn); }
+.export-result { margin: 10px 0; }
+.export-result h3 { font-size: 13px; margin: 0 0 8px; }
+.export-item {
+  display: flex; gap: 12px; align-items: flex-start;
+  background: var(--bg-panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px; margin-bottom: 8px;
+}
+.export-item video { max-width: 360px; border-radius: 6px; }
+.export-meta { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-dim); }
 .failure-box {
   background: rgba(229,83,75,0.08); border: 1px solid var(--danger);
   border-radius: 6px; padding: 8px 12px; font-size: 12px; color: var(--danger);
