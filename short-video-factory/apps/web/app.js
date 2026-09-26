@@ -575,7 +575,7 @@ function renderStudioShell() {
       '<div class="sidebar-perforation"></div>' +
       '<div class="sidebar-inner">' +
         '<div class="sidebar-head">' +
-          '<div class="sidebar-brand">短剧工坊 · STUDIO</div>' +
+          '<div class="sidebar-brand">镜界 · PRODUCTION STUDIO</div>' +
           '<a href="#/" class="sidebar-back">← 返回片库</a>' +
           '<h1 class="sidebar-title">' + esc(proj.title || '(无标题)') + '</h1>' +
           '<div class="sidebar-meta">LOCAL / ' + esc(ratio) + ' / ' + esc(proj.genre || proj.style || '-') + '</div>' +
