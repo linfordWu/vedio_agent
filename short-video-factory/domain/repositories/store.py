@@ -13,15 +13,16 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..schemas.core import (
-    Asset, AssetBinding, Character, DecisionAdvice, Event, Project,
-    RepairPlan, Run, Scene, ScoreReport, Shot, StepRun, UploadSession, now_ts,
+    Asset, AssetBinding, Character, DecisionAdvice, DirectorReview, Event,
+    Project, RepairPlan, Run, Scene, ScoreReport, Shot, StepRun, UploadSession,
+    now_ts,
 )
 
 TABLES = {
     "projects": ("project_id", Project),
     "scenes": ("scene_id", Scene),
     "shots": ("shot_id", Shot),
-    "characters": ("id", Character),
+    "characters": ("character_id", Character),
     "assets": ("asset_id", Asset),
     "bindings": ("binding_id", AssetBinding),
     "uploads": ("upload_id", UploadSession),
@@ -31,6 +32,7 @@ TABLES = {
     "decisions": ("decision_id", DecisionAdvice),
     "score_reports": ("run_id", ScoreReport),
     "repair_plans": ("run_id", RepairPlan),
+    "director_reviews": ("report_id", DirectorReview),
 }
 
 
@@ -139,6 +141,13 @@ class Store:
 
     def all(self, table: str, **where) -> list:
         return self._all(table, **where)
+
+    def delete(self, table: str, key: str) -> bool:
+        pk, _ = TABLES[table]
+        with self._lock:
+            cur = self._db.execute(f"DELETE FROM {table} WHERE {pk}=?", (key,))
+            self._db.commit()
+        return cur.rowcount > 0
 
     def close(self) -> None:
         self._db.close()

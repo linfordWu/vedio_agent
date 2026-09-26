@@ -54,6 +54,8 @@ QWEN_IMAGE_URL = os.environ.get("QWEN_IMAGE_URL", "http://172.19.0.3:8601")
 DEFAULT_SEED = int(os.environ.get("SVF_SEED", "2026"))
 RENDER_TIMEOUT_S = int(os.environ.get("SVF_RENDER_TIMEOUT", "7200"))
 MAX_REPAIRS = int(os.environ.get("SVF_MAX_REPAIRS", "2"))
+# 审核员 agent 每批发给视觉模型的抽帧数上限
+REVIEW_FRAME_BATCH = int(os.environ.get("SVF_REVIEW_FRAME_BATCH", "4"))
 
 for d in (DATA_DIR, ASSET_ROOT):
     d.mkdir(parents=True, exist_ok=True)

@@ -103,6 +103,7 @@ $$('.tab-btn').forEach((btn) => {
     if (btn.dataset.tab === 'tab-monitor') renderMonitor();
     if (btn.dataset.tab === 'tab-generate') renderRuns();
     if (btn.dataset.tab === 'tab-review') renderReview();
+    if (btn.dataset.tab === 'tab-director') renderDirector();
   });
 });
 
@@ -354,6 +355,41 @@ function shotSpec(shot) {
   return shot.spec || {};
 }
 
+// 验收要求渲染:对象 {required[], forbidden[]} 渲染成标签,字符串原样显示
+function renderAcceptance(acc) {
+  if (!acc) return '';
+  if (typeof acc === 'string') return esc(acc);
+  if (typeof acc !== 'object') return esc(String(acc));
+  let html = '';
+  const req = Array.isArray(acc.required) ? acc.required : [];
+  const forb = Array.isArray(acc.forbidden) ? acc.forbidden : [];
+  html += req.map((t) => '<span class="acc-tag acc-req">' + esc(typeof t === 'object' ? JSON.stringify(t) : t) + '</span>').join('');
+  html += forb.map((t) => '<span class="acc-tag acc-forb">' + esc(typeof t === 'object' ? JSON.stringify(t) : t) + '</span>').join('');
+  if (!html) html = esc(JSON.stringify(acc));
+  return html;
+}
+
+// 镜头参数渲染:对象渲染成 key:value 标签,字符串原样显示
+function renderCamera(cam) {
+  if (!cam) return '';
+  if (typeof cam === 'string') return esc(cam);
+  if (typeof cam !== 'object') return esc(String(cam));
+  return Object.entries(cam).map(([k, v]) =>
+    '<span class="acc-tag acc-cam">' + esc(k) + ': ' + esc(typeof v === 'object' ? JSON.stringify(v) : v) + '</span>'
+  ).join('');
+}
+
+// 字符串/对象列表渲染成标签(characters / reference_assets 等)
+function renderTagList(items) {
+  if (!items) return '';
+  const arr = Array.isArray(items) ? items : [items];
+  if (!arr.length) return '';
+  return arr.map((t) => {
+    const label = typeof t === 'object' ? (t.name || t.character_id || t.asset_id || JSON.stringify(t)) : t;
+    return '<span class="acc-tag">' + esc(label) + '</span>';
+  }).join('');
+}
+
 function shotSceneId(shot, scenes) {
   if (shot.scene_id) return shot.scene_id;
   const spec = shotSpec(shot);
@@ -402,10 +438,102 @@ function renderScenes() {
 
   // 绑定事件
   container.querySelectorAll('.shot-bind-btn').forEach((btn) => {
-    btn.addEventListener('click', () => bindShotAsset(btn));
+    btn.addEventListener('click', (e) => { e.stopPropagation(); bindShotAsset(btn); });
   });
   container.querySelectorAll('.shot-run-btn').forEach((btn) => {
-    btn.addEventListener('click', () => submitShotRun(btn.dataset.shotId, btn));
+    btn.addEventListener('click', (e) => { e.stopPropagation(); submitShotRun(btn.dataset.shotId, btn); });
+  });
+  container.querySelectorAll('.shot-bind-row select').forEach((sel) => {
+    sel.addEventListener('click', (e) => e.stopPropagation());
+  });
+  container.querySelectorAll('.shot-card').forEach((card) => {
+    card.addEventListener('click', () => showShotDetail(card.dataset.shotId));
+  });
+}
+
+/* ---------- 镜头详情(分镜单独查看) ---------- */
+$('#shot-detail').addEventListener('click', (e) => {
+  // 点击面板外的空白背景收起
+  if (e.target.id === 'shot-detail') hideShotDetail();
+});
+
+function hideShotDetail() {
+  const panel = $('#shot-detail');
+  panel.classList.add('hidden');
+  panel.innerHTML = '';
+  delete panel.dataset.shotId;
+}
+
+function showShotDetail(shotId) {
+  const data = state.project || {};
+  const shot = (data.shots || []).find((s) => (s.shot_id || s.id) === shotId);
+  if (!shot) return;
+  const spec = shotSpec(shot);
+  const scenes = data.scenes || [];
+  const sid = shotSceneId(shot, scenes);
+  const scene = scenes.find((sc) => (sc.scene_id || sc.id) === sid);
+  const sceneTitle = scene ? (scene.title || scene.name || sid) : (sid || '-');
+  const runs = getRuns().filter((r) => r.shot_id === shotId);
+
+  let html = '<div class="shot-detail-inner">' +
+    '<div class="shot-detail-head"><h3>镜头 ' + esc(shotId) + '</h3>' +
+    '<button id="shot-detail-close" class="btn btn-small">关闭 ✕</button></div>' +
+    '<div class="shot-field"><span class="k">shot_id</span><span class="mono">' + esc(shotId) + '</span></div>' +
+    '<div class="shot-field"><span class="k">所属场景</span>' + esc(sceneTitle) + '</div>' +
+    (spec.duration_s ? '<div class="shot-field"><span class="k">时长</span>' + esc(spec.duration_s) + 's</div>' : '') +
+    (spec.aspect_ratio ? '<div class="shot-field"><span class="k">宽高比</span>' + esc(spec.aspect_ratio) + '</div>' : '') +
+    (spec.action ? '<div class="shot-field"><span class="k">动作</span>' + esc(spec.action) + '</div>' : '') +
+    (spec.dialogue ? '<div class="shot-field"><span class="k">台词</span>' + esc(spec.dialogue) + '</div>' : '') +
+    (spec.camera ? '<div class="shot-field"><span class="k">镜头参数</span>' + renderCamera(spec.camera) + '</div>' : '') +
+    ((spec.acceptance || spec.acceptance_criteria)
+      ? '<div class="shot-field"><span class="k">验收要求</span>' + renderAcceptance(spec.acceptance || spec.acceptance_criteria) + '</div>' : '') +
+    (spec.characters ? '<div class="shot-field"><span class="k">出场角色</span>' + renderTagList(spec.characters) + '</div>' : '') +
+    ((spec.reference_assets || shot.reference_assets)
+      ? '<div class="shot-field"><span class="k">参考素材</span>' + renderTagList(spec.reference_assets || shot.reference_assets) + '</div>' : '');
+
+  // 该镜头全部 runs
+  html += '<h3 class="shot-detail-sub">生成任务(' + runs.length + ')</h3>';
+  if (!runs.length) {
+    html += '<p class="empty-hint">该镜头还没有生成任务</p>';
+  } else {
+    html += runs.map((run) => {
+      const rid = run.run_id || run.id;
+      const st = runState(run);
+      let rh = '<div class="shot-run-entry">' +
+        '<div class="shot-run-head"><span class="mono">' + esc(rid) + '</span>' +
+        '<span class="run-state-pill ' + esc(st) + '">' + esc(st) + '</span></div>';
+      const candidates = run.candidate_asset_ids || run.candidates || [];
+      if (candidates.length) {
+        rh += '<div class="candidate-videos">' + candidates.map((cid) => {
+          const aid = typeof cid === 'object' ? (cid.asset_id || cid.id) : cid;
+          const asset = state.assets.find((a) => (a.asset_id || a.id) === aid);
+          const url = '/assets/' + encodeURIComponent(aid) + '/file';
+          return (asset && !isVideoAsset(asset))
+            ? '<img src="' + esc(url) + '" alt="candidate">'
+            : '<video src="' + esc(url) + '" controls preload="metadata"></video>';
+        }).join('') + '</div>';
+      }
+      rh += renderScore(run);
+      rh += '<div class="review-row">' +
+        '<button class="btn btn-accent btn-small review-btn" data-decision="accept" data-run-id="' + esc(rid) + '">接受</button>' +
+        '<button class="btn btn-danger btn-small review-btn" data-decision="reject" data-run-id="' + esc(rid) + '">拒绝</button>' +
+        '<input type="text" class="review-note" placeholder="备注(可选,随审核一并提交)">' +
+        '</div></div>';
+      return rh;
+    }).join('');
+  }
+  html += '</div>';
+
+  const panel = $('#shot-detail');
+  panel.dataset.shotId = shotId;
+  panel.innerHTML = html;
+  panel.classList.remove('hidden');
+  $('#shot-detail-close').addEventListener('click', hideShotDetail);
+  panel.querySelectorAll('.review-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      submitReview(btn.dataset.runId, btn.dataset.decision, btn.closest('.shot-run-entry'));
+    });
   });
 }
 
@@ -426,7 +554,7 @@ function renderShotCard(shot) {
     (spec.action ? '<div class="shot-field"><span class="k">动作</span>' + esc(spec.action) + '</div>' : '') +
     (spec.dialogue ? '<div class="shot-field"><span class="k">台词</span>' + esc(spec.dialogue) + '</div>' : '') +
     (spec.acceptance || spec.acceptance_criteria
-      ? '<div class="shot-field"><span class="k">验收要求</span>' + esc(spec.acceptance || spec.acceptance_criteria) + '</div>' : '') +
+      ? '<div class="shot-field"><span class="k">验收要求</span>' + renderAcceptance(spec.acceptance || spec.acceptance_criteria) + '</div>' : '') +
     (spec.duration_s ? '<div class="shot-field"><span class="k">时长</span>' + esc(spec.duration_s) + 's</div>' : '') +
     '<div class="shot-bind-row">' +
       '<select class="shot-asset-select">' + assetOptions + '</select>' +
@@ -685,6 +813,9 @@ async function submitReview(runId, decision, box) {
       renderMonitor();
       renderReview();
       renderProjectSummary();
+      // 镜头详情面板打开时同步刷新内容
+      const sd = $('#shot-detail');
+      if (sd && !sd.classList.contains('hidden') && sd.dataset.shotId) showShotDetail(sd.dataset.shotId);
     }
   } catch (err) {
     toast('审核提交失败:' + err.message, 'err');
@@ -779,6 +910,209 @@ $('#accept-all-btn').addEventListener('click', async () => {
     renderProjectSummary();
   }
 });
+
+/* ---------- 导演台:角色/地点登记 + 连贯性审核 ---------- */
+const ISSUE_TYPE_MAP = {
+  story: '剧情连贯', character: '人物不一致', goof: '穿帮',
+  unexpected: '非预期', text: '画面文字',
+};
+let directorReviewPoll = null;
+
+function renderDirector() {
+  renderCharacterAssetOptions();
+  loadCharacters();
+  loadDirectorReviewReport();
+}
+
+// 参考图下拉:只列图片素材
+function renderCharacterAssetOptions() {
+  const sel = $('#character-asset-select');
+  if (!sel) return;
+  const cur = sel.value;
+  const imgs = (state.assets || []).filter((a) => !isVideoAsset(a));
+  sel.innerHTML = '<option value="">不使用参考图</option>' + imgs.map((a) => {
+    const id = a.asset_id || a.id;
+    return '<option value="' + esc(id) + '">' + esc(a.filename || a.name || id) + '</option>';
+  }).join('');
+  sel.value = cur;
+}
+
+async function loadCharacters() {
+  const wrap = $('#character-table-wrap');
+  if (!state.currentProjectId) {
+    wrap.innerHTML = '<p class="empty-hint">请先加载项目</p>';
+    return;
+  }
+  try {
+    const res = await api('/projects/' + encodeURIComponent(state.currentProjectId) + '/characters');
+    renderCharacterTable(res.characters || []);
+  } catch (err) {
+    wrap.innerHTML = '<p class="empty-hint">获取角色列表失败:' + esc(err.message) + '</p>';
+  }
+}
+
+function renderCharacterTable(chars) {
+  const wrap = $('#character-table-wrap');
+  if (!chars.length) {
+    wrap.innerHTML = '<p class="empty-hint">尚未登记角色或地点</p>';
+    return;
+  }
+  wrap.innerHTML = '<table class="run-table character-table"><thead><tr>' +
+    '<th>参考图</th><th>名称</th><th>类型</th><th>描述</th><th>ID</th><th>操作</th>' +
+    '</tr></thead><tbody>' +
+    chars.map((c) => {
+      const cid = c.character_id || c.id;
+      const thumb = c.asset_id
+        ? '<img class="char-thumb" src="/assets/' + encodeURIComponent(c.asset_id) + '/file" alt="参考图">'
+        : '<span class="char-no-thumb">-</span>';
+      const kind = c.kind === 'location' ? '地点' : '角色';
+      return '<tr>' +
+        '<td>' + thumb + '</td>' +
+        '<td>' + esc(c.name || '-') + '</td>' +
+        '<td><span class="kind-pill kind-' + esc(c.kind === 'location' ? 'location' : 'character') + '">' + kind + '</span></td>' +
+        '<td class="char-desc" title="' + esc(c.description || '') + '">' + esc(c.description || '-') + '</td>' +
+        '<td>' + esc(cid) + '</td>' +
+        '<td><button class="btn btn-small btn-danger char-del-btn" data-char-id="' + esc(cid) + '">删除</button></td>' +
+      '</tr>';
+    }).join('') + '</tbody></table>';
+  wrap.querySelectorAll('.char-del-btn').forEach((btn) => {
+    btn.addEventListener('click', () => deleteCharacter(btn.dataset.charId, btn));
+  });
+}
+
+$('#character-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!state.currentProjectId) { toast('请先创建或加载项目', 'err'); return; }
+  const fd = new FormData(e.target);
+  const body = {
+    name: fd.get('name'),
+    kind: fd.get('kind'),
+    description: fd.get('description') || '',
+  };
+  const aid = fd.get('asset_id');
+  if (aid) body.asset_id = aid;
+  try {
+    await api('/projects/' + encodeURIComponent(state.currentProjectId) + '/characters', {
+      method: 'POST', json: body,
+    });
+    toast('已登记:' + body.name, 'ok');
+    e.target.reset();
+    loadCharacters();
+  } catch (err) {
+    toast('登记失败:' + err.message, 'err');
+  }
+});
+
+$('#refresh-characters-btn').addEventListener('click', () => {
+  renderCharacterAssetOptions();
+  loadCharacters();
+});
+
+async function deleteCharacter(charId, btn) {
+  if (!confirm('删除该角色/地点 ' + charId + '?')) return;
+  btn.disabled = true;
+  try {
+    await api('/characters/' + encodeURIComponent(charId), { method: 'DELETE' });
+    toast('已删除:' + charId, 'ok');
+    loadCharacters();
+  } catch (err) {
+    toast('删除失败:' + err.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+/* ---- 连贯性审核 ---- */
+$('#director-review-btn').addEventListener('click', async () => {
+  if (!state.currentProjectId) { toast('请先创建或加载项目', 'err'); return; }
+  const btn = $('#director-review-btn');
+  btn.disabled = true;
+  $('#director-review-status').textContent = '审核中…(通常需要几十秒,请稍候)';
+  try {
+    await api('/projects/' + encodeURIComponent(state.currentProjectId) + '/director-review', {
+      method: 'POST', json: {},
+    });
+    pollDirectorReview();
+  } catch (err) {
+    toast('发起审核失败:' + err.message, 'err');
+    $('#director-review-status').textContent = '';
+    btn.disabled = false;
+  }
+});
+
+function pollDirectorReview() {
+  const started = Date.now();
+  if (directorReviewPoll) clearInterval(directorReviewPoll);
+  directorReviewPoll = setInterval(async () => {
+    // 最多轮询 2 分钟
+    if (Date.now() - started > 120000) {
+      clearInterval(directorReviewPoll);
+      directorReviewPoll = null;
+      $('#director-review-status').textContent = '审核超时,请稍后重新进入本页查看报告';
+      $('#director-review-btn').disabled = false;
+      return;
+    }
+    const report = await fetchDirectorReview();
+    if (report) {
+      clearInterval(directorReviewPoll);
+      directorReviewPoll = null;
+      renderDirectorReviewReport(report);
+      $('#director-review-status').textContent = '';
+      $('#director-review-btn').disabled = false;
+      toast('连贯性审核完成', 'ok');
+    }
+  }, 3000);
+}
+
+async function fetchDirectorReview() {
+  if (!state.currentProjectId) return null;
+  try {
+    const res = await fetch('/projects/' + encodeURIComponent(state.currentProjectId) + '/director-review');
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+    return await res.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+async function loadDirectorReviewReport() {
+  const box = $('#director-review-report');
+  if (!state.currentProjectId) {
+    box.innerHTML = '<p class="empty-hint">请先加载项目</p>';
+    return;
+  }
+  const report = await fetchDirectorReview();
+  if (report) renderDirectorReviewReport(report);
+  else box.innerHTML = '<p class="empty-hint">暂无审核报告</p>';
+}
+
+function renderDirectorReviewReport(report) {
+  const box = $('#director-review-report');
+  const issues = report.issues || [];
+  let html = '<div class="director-report-head">';
+  if (report.story_coherence != null && !isNaN(Number(report.story_coherence))) {
+    html += '<span class="coherence-score">剧情连贯性 ' + Number(report.story_coherence).toFixed(2) + '</span>';
+  }
+  if (report.created_at) html += '<span class="toolbar-hint">' + esc(report.created_at) + '</span>';
+  html += '</div>';
+  if (report.summary) html += '<p class="director-summary">' + esc(report.summary) + '</p>';
+  if (issues.length) {
+    html += '<table class="run-table issues-table"><thead><tr>' +
+      '<th>镜头</th><th>类型</th><th>严重度</th><th>详情</th></tr></thead><tbody>' +
+      issues.map((it) => {
+        const sev = String(it.severity || 'info').toLowerCase();
+        return '<tr>' +
+          '<td>' + esc(it.shot_id || '-') + '</td>' +
+          '<td>' + esc(ISSUE_TYPE_MAP[it.type] || it.type || '-') + '</td>' +
+          '<td><span class="severity-pill sev-' + esc(sev) + '">' + esc(it.severity || '-') + '</span></td>' +
+          '<td class="issue-detail">' + esc(it.detail || '') + '</td>' +
+        '</tr>';
+      }).join('') + '</tbody></table>';
+  } else {
+    html += '<p class="empty-hint">未发现问题 ✓</p>';
+  }
+  box.innerHTML = html;
+}
 
 /* ---------- SSE 事件流 ---------- */
 function setSSEStatus(mode, text) {
@@ -953,9 +1287,20 @@ function renderMonitor() {
       const id = run.run_id || run.id;
       const st = runState(run);
       const terminal = TERMINAL_STATES.includes(st);
+      // 评分:score.scores 是 {identity,action,scene,text_ok} 字典,取数值平均(保留2位)
       const scoreObj = run.score;
-      const total = scoreObj && typeof scoreObj.total === 'number' ? scoreObj.total.toFixed(2)
-        : scoreObj && typeof scoreObj.overall === 'number' ? scoreObj.overall.toFixed(2) : '-';
+      let total = '-';
+      if (scoreObj) {
+        const sd = scoreObj.scores || (scoreObj.detail && scoreObj.detail.scores);
+        if (sd && typeof sd === 'object') {
+          const vals = Object.values(sd).map(Number).filter((n) => !isNaN(n));
+          if (vals.length) total = (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2);
+        }
+        if (total === '-') {
+          if (typeof scoreObj.total === 'number') total = scoreObj.total.toFixed(2);
+          else if (typeof scoreObj.overall === 'number') total = scoreObj.overall.toFixed(2);
+        }
+      }
       const failure = run.failure
         ? (typeof run.failure === 'object' ? (run.failure.message || JSON.stringify(run.failure)) : run.failure)
         : '';

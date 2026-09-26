@@ -68,10 +68,14 @@ class UploadSession(BaseModel):
 # ------------------------------------------------------------- story tree ---
 
 class Character(BaseModel):
-    id: str
+    """角色/地点登记表条目：固定外观描述注入提示词保证跨镜头一致性。"""
+    character_id: str = Field(default_factory=lambda: new_id("ch"))
+    project_id: str = ""
     name: str = ""
-    description: str = ""
-    asset_version: int = 0            # approved reference image version
+    kind: Literal["character", "location"] = "character"
+    description: str = ""           # 可复用的固定外观/环境描述
+    asset_id: str = ""              # 可选参考图 asset
+    created_at: float = Field(default_factory=now_ts)
 
 
 class Acceptance(BaseModel):
@@ -174,6 +178,28 @@ class RepairPlan(BaseModel):
     action: str
     detail: str = ""
     invalidate_from: RunState = "PROMPT_READY"
+
+
+# ------------------------------------------------------- director review ----
+
+class ReviewIssue(BaseModel):
+    """审核员 agent 报出的单条问题。"""
+    shot_id: str = ""
+    run_id: str = ""
+    type: str = ""                  # story | character | goof | unexpected | text
+    severity: Literal["low", "mid", "high"] = "low"
+    detail: str = ""
+
+
+class DirectorReview(BaseModel):
+    """项目级连贯性审核报告。"""
+    report_id: str = Field(default_factory=lambda: new_id("rev"))
+    project_id: str
+    created_at: float = Field(default_factory=now_ts)
+    story_coherence: float = 0.0
+    summary: str = ""
+    issues: list[ReviewIssue] = Field(default_factory=list)
+    raw: str = ""                   # LLM 原始返回（解析失败时留档）
 
 
 # ---------------------------------------------------------------- events ----

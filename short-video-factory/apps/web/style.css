@@ -387,3 +387,91 @@ body {
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- 验收要求 / 标签 ---- */
+.acc-tag {
+  display: inline-block; font-size: 11px; padding: 1px 7px; margin: 1px 4px 1px 0;
+  border-radius: 4px; border: 1px solid var(--border-strong); color: var(--text-dim);
+}
+.acc-req { border-color: var(--accent-2); color: var(--accent-2); }
+.acc-forb { border-color: var(--danger); color: var(--danger); }
+.acc-cam { border-color: var(--accent); color: var(--accent); font-family: var(--mono); }
+
+/* ---- 镜头详情抽屉 ---- */
+.shot-card { cursor: pointer; transition: border-color .15s; }
+.shot-card:hover { border-color: var(--accent); }
+.shot-detail {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0,0,0,0.55);
+  display: flex; justify-content: flex-end;
+}
+.shot-detail-inner {
+  width: min(720px, 92vw); height: 100%; overflow-y: auto;
+  background: var(--bg-panel); border-left: 1px solid var(--border-strong);
+  padding: 20px 22px;
+  display: flex; flex-direction: column; gap: 8px;
+  box-shadow: -8px 0 24px rgba(0,0,0,.4);
+}
+.shot-detail-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--border);
+}
+.shot-detail-head h3 { font-size: 15px; }
+.shot-detail-inner .shot-field { font-size: 13px; line-height: 1.7; }
+.shot-detail-inner .mono { font-family: var(--mono); }
+.shot-detail-sub {
+  font-size: 13px; color: var(--text-dim); margin-top: 14px;
+  padding-top: 12px; border-top: 1px solid var(--border);
+}
+.shot-run-entry {
+  background: var(--bg-panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 14px; margin-bottom: 10px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.shot-run-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.shot-run-head .mono { font-family: var(--mono); color: var(--text-dim); }
+.shot-run-entry h3 { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+
+/* ---- 导演台 ---- */
+.character-table td { font-family: inherit; }
+.character-table td:last-child, .character-table td:nth-child(5) { font-family: var(--mono); }
+.char-thumb {
+  width: 64px; height: 44px; object-fit: cover; display: block;
+  border-radius: 4px; border: 1px solid var(--border); background: #000;
+}
+.char-no-thumb { color: var(--text-faint); }
+.char-desc {
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 12px;
+}
+.kind-pill {
+  font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px solid;
+}
+.kind-pill.kind-character { border-color: var(--accent); color: var(--accent); }
+.kind-pill.kind-location { border-color: var(--purple); color: var(--purple); }
+.director-report-head {
+  display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px;
+}
+.coherence-score {
+  font-size: 15px; font-weight: 700; color: var(--accent);
+  font-family: var(--mono);
+}
+.director-summary { font-size: 13px; color: var(--text); margin-bottom: 10px; }
+.issues-table { margin-top: 8px; }
+.issues-table td { font-family: inherit; font-size: 12px; }
+.issues-table td:first-child { font-family: var(--mono); }
+.issue-detail { white-space: pre-wrap; word-break: break-all; }
+.severity-pill {
+  font-size: 11px; padding: 1px 8px; border-radius: 10px;
+  border: 1px solid var(--border-strong); color: var(--text-dim);
+}
+.severity-pill.sev-high, .severity-pill.sev-critical, .severity-pill.sev-error, .severity-pill.sev-blocker {
+  border-color: var(--danger); color: var(--danger);
+}
+.severity-pill.sev-medium, .severity-pill.sev-warning, .severity-pill.sev-warn {
+  border-color: var(--warn); color: var(--warn);
+}
+.severity-pill.sev-low, .severity-pill.sev-info {
+  border-color: var(--accent); color: var(--accent);
+}
+.director-tip { font-size: 13px; color: var(--text-dim); line-height: 1.8; }

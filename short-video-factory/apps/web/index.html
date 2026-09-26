@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>短视频工厂 · 工作台</title>
-<link rel="stylesheet" href="./style.css?v=5">
+<link rel="stylesheet" href="./style.css?v=6">
 </head>
 <body>
 <header class="topbar">
@@ -21,6 +21,7 @@
 
 <nav class="tabs">
   <button class="tab-btn active" data-tab="tab-project">项目与素材</button>
+  <button class="tab-btn" data-tab="tab-director">导演台</button>
   <button class="tab-btn" data-tab="tab-shots">分镜镜头</button>
   <button class="tab-btn" data-tab="tab-generate">视频生成</button>
   <button class="tab-btn" data-tab="tab-monitor">任务监控</button>
@@ -81,19 +82,80 @@
     </div>
   </section>
 
+  <!-- ============ 页签:导演台 ============ -->
+  <section id="tab-director" class="tab-pane">
+    <div class="pane-grid pane-grid-wide-left">
+      <div class="panel">
+        <h2 class="panel-title">角色与地点登记</h2>
+        <form id="character-form" class="form">
+          <label>名称
+            <input type="text" name="name" required placeholder="例如:女主角小林 / 海边咖啡馆">
+          </label>
+          <label>类型
+            <select name="kind">
+              <option value="character">角色</option>
+              <option value="location">地点</option>
+            </select>
+          </label>
+          <label>外观描述
+            <textarea name="description" rows="3" placeholder="外貌、服装、气质 / 场景环境、氛围…"></textarea>
+          </label>
+          <label>参考图(可选,从素材库选图片)
+            <select name="asset_id" id="character-asset-select">
+              <option value="">不使用参考图</option>
+            </select>
+          </label>
+          <button type="submit" class="btn btn-primary">登记</button>
+        </form>
+
+        <div class="panel-title-row" style="margin-top:20px">
+          <h2 class="panel-title">已登记角色 / 地点</h2>
+          <button id="refresh-characters-btn" class="btn btn-small">刷新</button>
+        </div>
+        <div id="character-table-wrap">
+          <p class="empty-hint">请先加载项目</p>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel">
+          <div class="panel-title-row">
+            <h2 class="panel-title">连贯性审核</h2>
+            <button id="director-review-btn" class="btn btn-accent">发起审核</button>
+          </div>
+          <div id="director-review-status" class="toolbar-hint"></div>
+          <div id="director-review-report" style="margin-top:10px">
+            <p class="empty-hint">暂无审核报告</p>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top:20px">
+          <h2 class="panel-title">使用提示</h2>
+          <p class="director-tip">在这里登记角色与地点并绑定参考图后,生成剧本分镜与提交镜头生成时会自动把角色的外观描述和参考图注入提示词,保证同一角色在所有镜头中形象一致、场景不跑偏。登记完成后可点击「发起审核」,由导演 Agent 检查剧情连贯、人物一致性与穿帮问题。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ 页签二:分镜镜头 ============ -->
   <section id="tab-shots" class="tab-pane">
     <div class="pane-toolbar">
       <button id="refresh-shots-btn" class="btn">刷新分镜</button>
-      <span class="toolbar-hint">分镜由「项目与素材 → 生成剧本分镜」异步产生</span>
+      <span class="toolbar-hint">分镜由「项目与素材 → 生成剧本分镜」异步产生;点击镜头卡片查看详情</span>
     </div>
     <div id="scenes-container" class="scenes-container">
       <p class="empty-hint">暂无分镜数据,请先加载项目</p>
     </div>
+    <div id="shot-detail" class="shot-detail hidden"></div>
   </section>
 
   <!-- ============ 页签三:视频生成 ============ -->
   <section id="tab-generate" class="tab-pane">
+    <div class="pane-toolbar">
+      <button id="export-btn" class="btn btn-accent" disabled>导出成片</button>
+      <span id="export-hint" class="toolbar-hint">全部镜头验收通过后可用</span>
+    </div>
+    <div id="export-result" class="export-result"></div>
     <div class="pane-grid pane-grid-wide-left">
       <div class="panel">
         <div class="panel-title-row">
@@ -121,10 +183,8 @@
   <section id="tab-monitor" class="tab-pane">
     <div class="pane-toolbar">
       <button id="refresh-monitor-btn" class="btn">刷新</button>
-      <button id="export-btn" class="btn btn-accent" disabled>导出成片</button>
-      <span id="export-hint" class="toolbar-hint">全部镜头验收通过后可用</span>
+      <span class="toolbar-hint">导出成片已移至「视频生成」页签</span>
     </div>
-    <div id="export-result" class="export-result"></div>
     <table class="run-table">
       <thead>
         <tr>
@@ -152,6 +212,6 @@
 
 <div id="toast-container" class="toast-container"></div>
 
-<script src="./app.js?v=6"></script>
+<script src="./app.js?v=7"></script>
 </body>
 </html>

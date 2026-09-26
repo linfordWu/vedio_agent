@@ -16,7 +16,7 @@ import subprocess
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -26,8 +26,8 @@ from pydantic import BaseModel
 from ...config import settings
 from ...domain.repositories.store import Store
 from ...domain.schemas.core import (
-    Acceptance, Asset, AssetBinding, Event, Project, RepairPlan, Run, Scene,
-    Shot, ShotSpec, new_id, now_ts,
+    Acceptance, Asset, AssetBinding, Character, Event, Project, RepairPlan,
+    Run, Scene, Shot, ShotSpec, new_id, now_ts,
 )
 from ...ingestion.uploader import Uploader, UploadError
 from ...workers.engine import WorkerEngine
@@ -82,9 +82,25 @@ class ReviewRequest(BaseModel):
     note: str = ""
 
 
+class CharacterCreate(BaseModel):
+    name: str
+    kind: Literal["character", "location"] = "character"
+    description: str = ""
+    asset_id: Optional[str] = None
+
+
+class ShotCharactersBind(BaseModel):
+    character_ids: list[str]
+
+
+class ExportRequest(BaseModel):
+    subtitles: bool = True           # 有台词时烧录 SRT 字幕（重编码）
+
+
 # -------------------------------------------------------------------- plan --
 def _run_plan(store: Store, text_model, project: Project) -> None:
-    """Background planning thread: screenwriter -> scenes, director -> shots."""
+    """Background planning thread: screenwriter -> scenes, cast -> characters,
+    director -> shots (characters expanded from the registry)."""
     pid = project.project_id
 
     def ev(type_: str, actor: str, summary: str = "") -> Event:
@@ -93,7 +109,8 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
     try:
         store.append_event(ev("agent.started", "screenwriter", "planning scenes"))
         sc = text_model.chat_json(
-            "你是短剧编剧 agent。把创意简报拆成有序场景，只输出 JSON。",
+            "你是短剧编剧 agent。把创意简报拆成有序场景，只输出 JSON。"
+            "同一角色在所有场景中名称与外观描述必须逐字一致。",
             {"title": project.title, "style": project.style,
              "brief": project.brief,
              "duration_target_s": project.duration_target_s},
@@ -101,6 +118,34 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
         scenes = sc.get("scenes") or []
         store.append_event(ev("agent.completed", "screenwriter",
                               f"{len(scenes)} scenes"))
+
+        # 角色/地点登记：description 写成可复用的固定外观描述，保证跨镜头一致
+        cast: list[Character] = []
+        try:
+            store.append_event(ev("agent.started", "director", "extracting cast"))
+            cast_out = text_model.chat_json(
+                "你是短剧导演 agent。从剧本提取全部角色和固定地点清单，只输出 JSON。"
+                "每个角色的 description 写成可复用的固定外观描述"
+                "（如「艾米:20岁女孩,及肩黑发,米色毛衣」），地点同理；"
+                "同一角色/地点的描述在所有镜头中必须逐字一致。",
+                {"title": project.title, "style": project.style,
+                 "brief": project.brief, "scenes": scenes},
+                '{"characters":[{"name":str,'
+                '"kind":"character|location","description":str}]}')
+            for c in cast_out.get("characters") or []:
+                kind = "location" if c.get("kind") == "location" else "character"
+                ch = Character(project_id=pid, name=str(c.get("name", "")),
+                               kind=kind,
+                               description=str(c.get("description", "")))
+                if ch.name:
+                    store.put("characters", ch)
+                    cast.append(ch)
+            store.append_event(ev("agent.completed", "director",
+                                  f"{len(cast)} characters/locations"))
+        except Exception:
+            log.warning("cast extraction failed for %s", pid, exc_info=True)
+        cast_by_name = {c.name: c for c in cast}
+
         for i, s in enumerate(scenes):
             scene = Scene(scene_id=new_id("scene"), project_id=pid, order=i,
                           title=str(s.get("title", "")),
@@ -109,10 +154,15 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
             store.append_event(ev("agent.started", "director",
                                   f"shots for scene {scene.title}"))
             sh = text_model.chat_json(
-                "你是短剧导演 agent。把场景拆成有序镜头，只输出 JSON。",
+                "你是短剧导演 agent。把场景拆成有序镜头，只输出 JSON。"
+                "shot.characters 填本镜头出现的角色/地点名，必须与给定清单逐字一致；"
+                "同一角色在所有镜头中外观描述逐字一致，场景描述同理。",
                 {"project_style": project.style,
-                 "scene": {"title": scene.title, "summary": scene.summary}},
+                 "scene": {"title": scene.title, "summary": scene.summary},
+                 "cast": [{"name": c.name, "kind": c.kind,
+                           "description": c.description} for c in cast]},
                 '{"shots":[{"action":str,"dialogue":str,"duration_s":int,'
+                '"characters":[str],'
                 '"aspect_ratio":str,"camera":{str:str},'
                 '"acceptance":{"required":[str],"forbidden":[str]}}]}')
             for j, d in enumerate(sh.get("shots") or []):
@@ -121,12 +171,26 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                     acceptance = Acceptance(**(d.get("acceptance") or {}))
                 except Exception:
                     acceptance = Acceptance()
+                # 角色名 -> 登记表展开，参考图合入 reference_assets
+                spec_chars = []
+                ref_assets: list[str] = []
+                for name in d.get("characters") or []:
+                    ch = cast_by_name.get(str(name))
+                    if ch is None:
+                        continue
+                    spec_chars.append({"character_id": ch.character_id,
+                                       "name": ch.name, "kind": ch.kind,
+                                       "description": ch.description})
+                    if ch.asset_id and ch.asset_id not in ref_assets:
+                        ref_assets.append(ch.asset_id)
                 spec = ShotSpec(
                     shot_id=shot_id,
                     action=str(d.get("action", "")),
                     dialogue=str(d.get("dialogue", "")),
                     duration_s=int(d.get("duration_s") or 5),
                     aspect_ratio=str(d.get("aspect_ratio") or "9:16"),
+                    characters=spec_chars,
+                    reference_assets=ref_assets,
                     camera={str(k): str(v)
                             for k, v in (d.get("camera") or {}).items()},
                     acceptance=acceptance)
@@ -141,24 +205,64 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
         store.append_event(ev("plan.failed", "screenwriter", str(exc)[:300]))
 
 
+_NO_TEXT_SUFFIX = "画面中不出现任何文字、字幕、水印、logo、标识"
+
+
 def _compose_prompt(project: Optional[Project], shot: Shot) -> str:
     spec = shot.spec
     parts = []
     if project and project.style:
         parts.append(f"风格: {project.style}")
+    if spec.characters:
+        descs = [f"{c.get('name', '')}={c.get('description', '')}"
+                 if c.get("description") else str(c.get("name", ""))
+                 for c in spec.characters]
+        parts.append("角色: " + "; ".join(descs))
     if spec.action:
         parts.append(spec.action)
     if spec.dialogue:
         parts.append(f"台词: {spec.dialogue}")
     if spec.camera:
         parts.append("镜头: " + ", ".join(f"{k}={v}" for k, v in spec.camera.items()))
-    return " | ".join(parts) or f"shot {shot.shot_id}"
+    prompt = " | ".join(parts) or f"shot {shot.shot_id}"
+    # 视频模型生成文字会乱码：固定追加禁文字约束（乱码治理）
+    return prompt + " | " + _NO_TEXT_SUFFIX
+
+
+# ------------------------------------------------------------------ export --
+def _srt_timestamp(seconds: float) -> str:
+    ms = max(0, int(round(seconds * 1000)))
+    h, ms = divmod(ms, 3600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def build_srt(clips: list[dict]) -> str:
+    """按镜头顺序和累计时长生成 SRT（每个有台词的镜头一段）。"""
+    blocks: list[str] = []
+    t = 0.0
+    idx = 1
+    for c in clips:
+        dur = float(c.get("duration_s") or 5)
+        dialogue = (c.get("dialogue") or "").strip()
+        if dialogue:
+            blocks.append(f"{idx}\n{_srt_timestamp(t)} --> "
+                          f"{_srt_timestamp(t + dur)}\n{dialogue}")
+            idx += 1
+        t += dur
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def _escape_filter_path(path: str) -> str:
+    """ffmpeg filter 里的路径转义（subtitles= 参数）。"""
+    return path.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
 
 # --------------------------------------------------------------- application --
 def create_app(store: Store, asset_store, renderer=None, judge=None,
                decision=None, text_model=None, data_dir: Optional[str] = None,
-               start_worker: bool = True,
+               start_worker: bool = True, reviewer=None,
                worker_poll_interval_s: float = 0.5) -> FastAPI:
     engine = WorkerEngine(store, asset_store, renderer=renderer, judge=judge,
                           decision=decision, text_model=text_model,
@@ -295,6 +399,55 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                                                  "application/octet-stream"),
             headers={"Content-Disposition": f'inline; filename="{filename}"'})
 
+    # ----------------------------------------------------------- characters --
+    @app.get("/projects/{project_id}/characters")
+    def list_characters(project_id: str) -> dict:
+        _get_or_404("projects", project_id)
+        chars = sorted(store.all("characters", project_id=project_id),
+                       key=lambda c: c.created_at)
+        return {"characters": chars}
+
+    @app.post("/projects/{project_id}/characters", status_code=201)
+    def create_character(project_id: str, body: CharacterCreate) -> Character:
+        _get_or_404("projects", project_id)
+        if body.asset_id:
+            _get_or_404("assets", body.asset_id)
+        ch = Character(project_id=project_id, name=body.name, kind=body.kind,
+                       description=body.description,
+                       asset_id=body.asset_id or "")
+        store.put("characters", ch)
+        store.append_event(Event(project_id=project_id, type="character.created",
+                                 actor="api", summary=f"{ch.kind}: {ch.name}"))
+        return ch
+
+    @app.delete("/characters/{character_id}")
+    def delete_character(character_id: str) -> dict:
+        if store.get("characters", character_id) is None:
+            raise HTTPException(404, f"characters/{character_id} not found")
+        store.delete("characters", character_id)
+        return {"status": "deleted"}
+
+    @app.post("/shots/{shot_id}/characters")
+    def bind_shot_characters(shot_id: str, body: ShotCharactersBind) -> Shot:
+        shot = _get_or_404("shots", shot_id)
+        chars = []
+        for cid in body.character_ids:
+            ch = _get_or_404("characters", cid)
+            chars.append(ch)
+        shot.spec.characters = [
+            {"character_id": c.character_id, "name": c.name, "kind": c.kind,
+             "description": c.description} for c in chars]
+        # 有参考图的角色 asset 合入 reference_assets：去重、保持顺序，
+        # 第一个角色参考图放最前（渲染只取第一张）
+        char_refs = [c.asset_id for c in chars if c.asset_id]
+        shot.spec.reference_assets = char_refs + [
+            a for a in shot.spec.reference_assets if a not in char_refs]
+        store.put("shots", shot)
+        store.append_event(Event(project_id=shot.project_id,
+                                 type="shot.characters_bound", actor="api",
+                                 summary=", ".join(c.name for c in chars)))
+        return shot
+
     # ----------------------------------------------------------- shot wiring --
     @app.post("/shots/{shot_id}/asset-bindings", status_code=201)
     def bind_asset(shot_id: str, body: BindingCreate) -> AssetBinding:
@@ -308,6 +461,12 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                                clip_range=body.clip_range)
         store.put("bindings", binding)
         shot = store.get("shots", shot_id)
+        # reference/first_frame 绑定的资产同步进 spec.reference_assets（去重），
+        # 否则渲染时 _process_generate 看不到参考图
+        if body.role in ("reference", "first_frame") \
+                and asset.asset_id not in shot.spec.reference_assets:
+            shot.spec.reference_assets = shot.spec.reference_assets + [asset.asset_id]
+            store.put("shots", shot)
         store.append_event(Event(project_id=shot.project_id, type="asset.bound",
                                  actor="api",
                                  summary=f"{body.role}: {asset.asset_id}"))
@@ -449,7 +608,8 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
 
     # ---------------------------------------------------------------- export --
     @app.post("/projects/{project_id}/export")
-    def export_project(project_id: str) -> dict:
+    def export_project(project_id: str, body: Optional[ExportRequest] = None) -> dict:
+        body = body or ExportRequest()
         project = _get_or_404("projects", project_id)
         scene_order = {s.scene_id: s.order
                        for s in store.all("scenes", project_id=project_id)}
@@ -472,10 +632,18 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                 raise HTTPException(409, f"accepted run {run.run_id} has no video asset")
             clips.append({"shot_id": shot.shot_id, "run_id": run.run_id,
                           "asset_id": video.asset_id,
-                          "storage_key": video.storage_key})
+                          "storage_key": video.storage_key,
+                          "dialogue": shot.spec.dialogue,
+                          "duration_s": shot.spec.duration_s})
 
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg:
+            # 有台词且要求字幕：烧录 SRT（必须重编码）；否则走 concat -c copy 快路径
+            if body.subtitles and any(c["dialogue"].strip() for c in clips):
+                asset = _try_ffmpeg_concat_subtitles(ffmpeg, project, clips)
+                if asset is not None:
+                    return {"asset": asset, "mode": "concat_subtitles",
+                            "clips": len(clips)}
             asset = _try_ffmpeg_concat(ffmpeg, project, clips)
             if asset is not None:
                 return {"asset": asset, "mode": "concat", "clips": len(clips)}
@@ -524,6 +692,84 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             return None
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
+
+    def _try_ffmpeg_concat_subtitles(ffmpeg: str, project: Project,
+                                     clips: list) -> Optional[Asset]:
+        """concat + SRT 字幕烧录：subtitles 滤镜必须重编码（libx264）。"""
+        export_id = new_id("export")
+        workdir = Path(settings.DATA_DIR) / "exports" / export_id
+        try:
+            workdir.mkdir(parents=True, exist_ok=True)
+            srt_file = workdir / "subtitles.srt"
+            srt_file.write_text(build_srt(clips), encoding="utf-8")
+            list_file = workdir / "concat.txt"
+            list_file.write_text("".join(
+                f"file '{asset_store.path_for(c['storage_key'])}'\n" for c in clips))
+            out = workdir / f"{export_id}.mp4"
+            vf = f"subtitles={_escape_filter_path(str(srt_file))}"
+            res = subprocess.run(
+                [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
+                 "-vf", vf, "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+                 "-c:a", "copy", str(out)],
+                capture_output=True, text=True, timeout=1800)
+            if res.returncode != 0 or not out.exists() or out.stat().st_size == 0:
+                log.warning("ffmpeg subtitle concat failed for %s: %s",
+                            project.project_id, res.stderr[-500:])
+                return None
+            asset = asset_store.save_file(
+                str(out), project.project_id, "video",
+                f"{project.title or export_id}.mp4", source="derived",
+                parent_asset_ids=[c["asset_id"] for c in clips])
+            asset.status = "READY"
+            store.put("assets", asset)
+            store.append_event(Event(project_id=project.project_id,
+                                     type="export.completed", actor="orchestrator",
+                                     summary=f"concat {len(clips)} clips + subtitles"))
+            return asset
+        except Exception:
+            log.exception("ffmpeg subtitle concat errored")
+            return None
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+    # ------------------------------------------------------- director review --
+    reviewing: set[str] = set()
+    review_lock = threading.Lock()
+
+    @app.post("/projects/{project_id}/director-review", status_code=202)
+    def director_review(project_id: str) -> dict:
+        project = _get_or_404("projects", project_id)
+        with review_lock:
+            if project_id in reviewing:
+                return {"status": "reviewing"}
+            reviewing.add(project_id)
+
+        def _run_review() -> None:
+            try:
+                agent = reviewer or _make_reviewer()
+                agent.review(project)
+            except Exception:
+                log.exception("director review failed for %s", project_id)
+            finally:
+                with review_lock:
+                    reviewing.discard(project_id)
+
+        threading.Thread(target=_run_review, name=f"svf-review-{project_id}",
+                         daemon=True).start()
+        return {"status": "reviewing"}
+
+    def _make_reviewer():
+        from ...agents.reviewer import ReviewerAgent
+        return ReviewerAgent(store, asset_store)
+
+    @app.get("/projects/{project_id}/director-review")
+    def get_director_review(project_id: str) -> dict:
+        _get_or_404("projects", project_id)
+        reports = store.all("director_reviews", project_id=project_id)
+        if not reports:
+            raise HTTPException(404, "no director review yet")
+        latest = max(reports, key=lambda r: r.created_at)
+        return {"report": latest}
 
     # ------------------------------------------------------------------ SSE --
     @app.get("/projects/{project_id}/events")
