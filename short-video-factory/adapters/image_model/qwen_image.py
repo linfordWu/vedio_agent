@@ -19,11 +19,13 @@ class QwenImageModel:
     """ImageModel protocol implementation (HTTP service backend)."""
 
     def __init__(self, asset_store, base: Optional[str] = None,
-                 timeout_s: float = 1800.0, project_id: str = "factory"):
+                 timeout_s: float = 1800.0, project_id: str = "factory",
+                 store=None):
         self.asset_store = asset_store
         self.base = (base or settings.QWEN_IMAGE_URL).rstrip("/")
         self.timeout_s = timeout_s
         self.project_id = project_id
+        self.store = store  # 传入则 generate 后自动登记 assets 表
 
     def available(self) -> bool:
         try:
@@ -53,4 +55,6 @@ class QwenImageModel:
             png, project_id, "image", out_key.rsplit("/", 1)[-1] + ".png"
             if not out_key.endswith(".png") else out_key.rsplit("/", 1)[-1],
             source="generated")
+        if self.store is not None:
+            self.store.put("assets", asset)
         return asset.storage_key

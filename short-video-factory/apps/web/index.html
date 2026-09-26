@@ -130,7 +130,10 @@
 
         <div class="panel-title-row" style="margin-top:20px">
           <h2 class="panel-title">已登记角色 / 地点</h2>
-          <button id="refresh-characters-btn" class="btn btn-small">刷新</button>
+          <div>
+            <button id="portraits-btn" class="btn btn-small btn-accent" title="为缺参考图的角色用 Qwen-Image 自动生成定妆照">生成定妆照</button>
+            <button id="refresh-characters-btn" class="btn btn-small">刷新</button>
+          </div>
         </div>
         <div id="character-table-wrap">
           <p class="empty-hint">请先加载项目</p>
@@ -255,6 +258,6 @@
 
 <div id="toast-container" class="toast-container"></div>
 
-<script src="./app.js?v=8"></script>
+<script src="./app.js?v=9"></script>
 </body>
 </html>

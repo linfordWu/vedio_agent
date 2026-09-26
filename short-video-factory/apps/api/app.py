@@ -318,6 +318,7 @@ def _escape_filter_path(path: str) -> str:
 def create_app(store: Store, asset_store, renderer=None, judge=None,
                decision=None, text_model=None, data_dir: Optional[str] = None,
                start_worker: bool = True, reviewer=None, classifier=None,
+               image_model=None,
                worker_poll_interval_s: float = 0.5) -> FastAPI:
     engine = WorkerEngine(store, asset_store, renderer=renderer, judge=judge,
                           decision=decision, text_model=text_model,
@@ -399,6 +400,23 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             store.append_event(Event(project_id=pid, type="quick.started",
                                      actor="orchestrator", summary=mode))
             _run_plan(store, text_model, project)
+            # 角色定妆照：像素级身份锁定(图片服务不可用时跳过,仅文字锁定)
+            try:
+                from ...agents.casting import generate_character_portraits
+                model = image_model or _make_image_model()
+                if model.available():
+                    store.append_event(Event(project_id=pid,
+                                             type="casting.started",
+                                             actor="orchestrator",
+                                             summary="generating portraits"))
+                    made = generate_character_portraits(
+                        store, model, pid, style=project.style)
+                    store.append_event(Event(project_id=pid,
+                                             type="casting.completed",
+                                             actor="orchestrator",
+                                             summary=f"{len(made)} portraits"))
+            except Exception:
+                log.warning("portrait step skipped for %s", pid, exc_info=True)
             shots = sorted(store.all("shots", project_id=pid),
                            key=lambda s: (s.scene_id, s.order))
             # mode=assets：所有图片素材设进每个 shot 的 reference_assets
@@ -927,6 +945,37 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
     def _make_reviewer():
         from ...agents.reviewer import ReviewerAgent
         return ReviewerAgent(store, asset_store)
+
+    def _make_image_model():
+        from ...adapters.image_model.qwen_image import QwenImageModel
+        return QwenImageModel(asset_store, store=store)
+
+    @app.post("/projects/{project_id}/characters/portraits", status_code=202)
+    def character_portraits(project_id: str) -> dict:
+        """为缺参考图的角色生成定妆照(后台线程,像素级身份锁定)。"""
+        project = _get_or_404("projects", project_id)
+
+        def _run_portraits() -> None:
+            from ...agents.casting import generate_character_portraits
+            try:
+                store.append_event(Event(project_id=project_id,
+                                         type="casting.started", actor="api",
+                                         summary="generating portraits"))
+                model = image_model or _make_image_model()
+                made = generate_character_portraits(
+                    store, model, project_id, style=project.style)
+                store.append_event(Event(project_id=project_id,
+                                         type="casting.completed", actor="api",
+                                         summary=f"{len(made)} portraits"))
+            except Exception as exc:
+                log.exception("portrait generation failed for %s", project_id)
+                store.append_event(Event(project_id=project_id,
+                                       type="casting.failed", actor="api",
+                                       summary=str(exc)[:300]))
+
+        threading.Thread(target=_run_portraits,
+                         name=f"svf-casting-{project_id}", daemon=True).start()
+        return {"status": "casting"}
 
     @app.get("/projects/{project_id}/director-review")
     def get_director_review(project_id: str) -> dict:

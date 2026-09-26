@@ -1251,6 +1251,27 @@ $('#refresh-characters-btn').addEventListener('click', () => {
   loadCharacters();
 });
 
+$('#portraits-btn').addEventListener('click', async () => {
+  if (!state.currentProjectId) { toast('请先选择项目', 'err'); return; }
+  const btn = $('#portraits-btn');
+  btn.disabled = true;
+  try {
+    await api('/projects/' + encodeURIComponent(state.currentProjectId) + '/characters/portraits', { method: 'POST' });
+    toast('定妆照生成已启动(约需几分钟),稍后点刷新查看', 'ok');
+    // 定妆照每张约 1-2 分钟,轮询刷新角色表
+    let tries = 0;
+    const timer = setInterval(async () => {
+      tries++;
+      await loadCharacters();
+      if (tries >= 20) clearInterval(timer);
+    }, 15000);
+  } catch (err) {
+    toast('启动失败:' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 async function deleteCharacter(charId, btn) {
   if (!confirm('删除该角色/地点 ' + charId + '?')) return;
   btn.disabled = true;
