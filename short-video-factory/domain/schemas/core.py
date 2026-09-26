@@ -108,6 +108,16 @@ class ShotSpec(BaseModel):
     continuity: dict[str, str] = Field(default_factory=dict)
     reference_assets: list[str] = Field(default_factory=list)
     acceptance: Acceptance = Field(default_factory=Acceptance)
+    # ---- 序列/节拍结构（seedance 密度与续拍思想的中文化重写）----
+    sequence_relation: Literal["standalone", "sequence_first",
+                               "seamless_continuation", "next_shot",
+                               "reanchor"] = "standalone"
+    # 三桶节拍：already_happened 已演完不许重播 / this_clip_only 本镜头独占 /
+    # reserved_for_later 后续镜头预留不许泄露
+    beats: dict[str, list[str]] = Field(default_factory=dict)
+    observed_end_state: str = ""    # 验收时由评审写回的实际末态（供下一镜接续）
+    felt_intent: str = ""           # 内部意图，不进提示词
+    extension_depth: int = 0        # 链式续拍深度
 
 
 class Shot(BaseModel):
@@ -172,12 +182,18 @@ class Run(BaseModel):
 
 class ScoreReport(BaseModel):
     run_id: str
-    verdict: Literal["accept", "repair", "reject", "uncertain"]
+    verdict: Literal["accept", "accept_with_deviation", "repair", "reject",
+                     "uncertain"]
     hard_checks: dict[str, bool] = Field(default_factory=dict)
     scores: dict[str, float] = Field(default_factory=dict)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     uncertain: bool = False
     rubric_version: str = "shortdrama-v1"
+    # accept_with_deviation 时记录可接受偏差的说明
+    deviation: str = ""
+    # 评审器对画面观察的把握；low 的 accept 不许自动通过
+    observation_confidence: Literal["low", "medium", "high"] = "high"
+    observed_end_state: str = ""    # 末帧实际状态描述，写回 shot 供续接
 
 
 class RepairPlan(BaseModel):

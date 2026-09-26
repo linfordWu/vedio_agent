@@ -56,6 +56,8 @@ RENDER_TIMEOUT_S = int(os.environ.get("SVF_RENDER_TIMEOUT", "7200"))
 MAX_REPAIRS = int(os.environ.get("SVF_MAX_REPAIRS", "2"))
 # 审核员 agent 每批发给视觉模型的抽帧数上限
 REVIEW_FRAME_BATCH = int(os.environ.get("SVF_REVIEW_FRAME_BATCH", "4"))
+# 提示词密度负载阈值：超过只记 density.warning 事件，不减内容
+DENSITY_LIMIT = float(os.environ.get("SVF_DENSITY_LIMIT", "3.0"))
 
 for d in (DATA_DIR, ASSET_ROOT):
     d.mkdir(parents=True, exist_ok=True)

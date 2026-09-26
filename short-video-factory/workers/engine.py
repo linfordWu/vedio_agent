@@ -257,7 +257,8 @@ class WorkerEngine:
         report.run_id = run.run_id
         report.hard_checks = {**checks["hard_checks"], **report.hard_checks}
         report.evidence = checks["evidence"] + report.evidence
-        if report.verdict == "accept" and not all(report.hard_checks.values()):
+        if report.verdict in ("accept", "accept_with_deviation") \
+                and not all(report.hard_checks.values()):
             report.verdict = "repair"
             report.evidence.append({"kind": "orchestrator",
                                     "note": "hard check failed; downgraded to repair"})
@@ -281,11 +282,24 @@ class WorkerEngine:
         fresh.updated_at = now_ts()
         self.store.put("runs", fresh)
 
-        if report.verdict == "accept":
+        if report.verdict in ("accept", "accept_with_deviation"):
+            if report.observation_confidence == "low":
+                # 评审器看不清的不许自动通过，转人工
+                self._transition(run, "HUMAN_REVIEW", "run.human_review",
+                                 "vision-judge",
+                                 summary=f"verdict={report.verdict} 但 "
+                                         "observation_confidence=low，转人工复核")
+                return
+            summary = f"verdict={report.verdict} scores={report.scores}"
+            if report.deviation:
+                summary += f" deviation={report.deviation[:100]}"
             self._transition(run, "ACCEPTED", "run.accepted", "vision-judge",
-                             summary=f"verdict=accept scores={report.scores}")
+                             summary=summary)
             shot = self.store.get("shots", shot.shot_id)
             shot.accepted_run_id = run.run_id
+            # 评审观测到的实际末态写回 shot，供下一镜续接
+            if report.observed_end_state:
+                shot.spec.observed_end_state = report.observed_end_state
             self.store.put("shots", shot)
             return
 

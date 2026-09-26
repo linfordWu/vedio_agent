@@ -38,8 +38,22 @@ Score each dimension from 0.0 to 1.0:
 - scene: setting/background matches the spec
 - text_ok: no garbled/extra on-screen text
 
+Also report:
+- verdict: "accept" | "accept_with_deviation" | "repair" | "reject" —
+  use accept_with_deviation when the clip basically matches but has an
+  acceptable deviation, and explain the deviation in "deviation"
+- observation_confidence: "high" | "medium" | "low" — how clearly you
+  can actually see the frames (low = blurry/dark/too short to judge)
+- observed_end_state: one sentence describing the FINAL frame — character
+  positions, posture, props, facing direction (used to chain the next shot)
+
 Respond with ONE JSON object only:
-{{"identity": 0-1, "action": 0-1, "scene": 0-1, "text_ok": 0-1, "issues": ["short failure tags"]}}"""
+{{"identity": 0-1, "action": 0-1, "scene": 0-1, "text_ok": 0-1,
+  "verdict": "accept|accept_with_deviation|repair|reject",
+  "deviation": "str",
+  "observation_confidence": "high|medium|low",
+  "observed_end_state": "str",
+  "issues": ["short failure tags"]}}"""
 
 
 class GemmaVisionJudge:
@@ -117,6 +131,10 @@ class GemmaVisionJudge:
         scores: dict[str, float] = {}
         issues: list[str] = []
         parse_failed = False
+        model_verdict = ""
+        deviation = ""
+        obs_confidence = "high"
+        observed_end_state = ""
         try:
             reply = self.client.chat([{"role": "user", "content": content}],
                                      max_tokens=512, temperature=0.1)
@@ -124,6 +142,12 @@ class GemmaVisionJudge:
             for key in ("identity", "action", "scene", "text_ok"):
                 scores[key] = max(0.0, min(1.0, float(parsed.get(key, 0.0))))
             issues = [str(i) for i in parsed.get("issues") or []]
+            model_verdict = str(parsed.get("verdict") or "")
+            deviation = str(parsed.get("deviation") or "")
+            obs_confidence = str(parsed.get("observation_confidence") or "high")
+            if obs_confidence not in ("low", "medium", "high"):
+                obs_confidence = "high"
+            observed_end_state = str(parsed.get("observed_end_state") or "")
         except (ValueError, KeyError, TypeError):
             parse_failed = True
 
@@ -132,6 +156,10 @@ class GemmaVisionJudge:
             verdict = "repair"
         elif parse_failed:
             verdict = "uncertain"
+        elif model_verdict == "accept_with_deviation" \
+                and all(v >= REPAIR_MAX for v in scores.values()):
+            # 基本符合但有可接受偏差：放行但记录偏差说明
+            verdict = "accept_with_deviation"
         elif any(v < REPAIR_MAX for v in scores.values()):
             verdict = "repair"
         elif all(v >= ACCEPT_MIN for v in scores.values()):
@@ -143,4 +171,7 @@ class GemmaVisionJudge:
         return ScoreReport(run_id="", verdict=verdict, hard_checks=hard,
                            scores=scores, evidence=evidence,
                            uncertain=(verdict == "uncertain"),
-                           rubric_version=rubric)
+                           rubric_version=rubric,
+                           deviation=deviation,
+                           observation_confidence=obs_confidence,
+                           observed_end_state=observed_end_state)

@@ -30,6 +30,7 @@ from ...domain.schemas.core import (
     Event, Project, RepairPlan, Run, Scene, Shot, ShotSpec, new_id, now_ts,
 )
 from ...ingestion.uploader import Uploader, UploadError
+from ...quality.density import density_score, emotion_hits
 from ...workers.engine import WorkerEngine
 
 log = logging.getLogger(__name__)
@@ -169,13 +170,21 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
             sh = text_model.chat_json(
                 "你是短剧导演 agent。把场景拆成有序镜头，只输出 JSON。"
                 "shot.characters 填本镜头出现的角色/地点名，必须与给定清单逐字一致；"
-                "同一角色在所有镜头中外观描述逐字一致，场景描述同理。",
+                "同一角色在所有镜头中外观描述逐字一致，场景描述同理。"
+                "每个镜头的 beats 分三桶：already_happened=已演完不许重播的情节、"
+                "this_clip_only=本镜头独占的节拍、reserved_for_later=后续镜头预留"
+                "不许提前泄露的节拍；felt_intent=角色内心意图（不进画面描述）。"
+                "sequence_relation：场景内第一镜=sequence_first，后续镜头=next_shot。",
                 {"project_style": project.style,
                  "scene": {"title": scene.title, "summary": scene.summary},
                  "cast": [{"name": c.name, "kind": c.kind,
                            "description": c.description} for c in cast]},
-                '{"shots":[{"action":str,"dialogue":str,"duration_s":int,'
+                '{"shots":[{"action":str,"dialogue":str,"duration_s":int(每镜4-8秒),'
                 '"characters":[str],'
+                '"sequence_relation":"sequence_first|next_shot",'
+                '"felt_intent":str,'
+                '"beats":{"already_happened":[str],"this_clip_only":[str],'
+                '"reserved_for_later":[str]},'
                 '"aspect_ratio":str,"camera":{str:str},'
                 '"acceptance":{"required":[str],"forbidden":[str]}}]}')
             for j, d in enumerate(sh.get("shots") or []):
@@ -196,14 +205,28 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                                        "description": ch.description})
                     if ch.asset_id and ch.asset_id not in ref_assets:
                         ref_assets.append(ch.asset_id)
+                # 三桶节拍 + 序列关系（LLM 不给/给错时按镜头位置兜底）
+                beats_raw = d.get("beats") or {}
+                beats = {k: [str(x) for x in (beats_raw.get(k) or [])]
+                         for k in ("already_happened", "this_clip_only",
+                                   "reserved_for_later")}
+                relation = str(d.get("sequence_relation") or "")
+                if relation not in ("standalone", "sequence_first",
+                                    "seamless_continuation", "next_shot",
+                                    "reanchor"):
+                    relation = "sequence_first" if j == 0 else "next_shot"
                 spec = ShotSpec(
                     shot_id=shot_id,
                     action=str(d.get("action", "")),
                     dialogue=str(d.get("dialogue", "")),
-                    duration_s=int(d.get("duration_s") or 5),
+                    # 视频模型单镜时长有限,LLM 给的时长收敛到 [3,8] 秒
+                    duration_s=max(3, min(8, int(d.get("duration_s") or 5))),
                     aspect_ratio=str(d.get("aspect_ratio") or "9:16"),
                     characters=spec_chars,
                     reference_assets=ref_assets,
+                    sequence_relation=relation,
+                    beats=beats,
+                    felt_intent=str(d.get("felt_intent", "")),
                     camera={str(k): str(v)
                             for k, v in (d.get("camera") or {}).items()},
                     acceptance=acceptance)
@@ -221,7 +244,8 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
 _NO_TEXT_SUFFIX = "画面中不出现任何文字、字幕、水印、logo、标识"
 
 
-def _compose_prompt(project: Optional[Project], shot: Shot) -> str:
+def _compose_prompt(project: Optional[Project], shot: Shot,
+                    prev_shot: Optional[Shot] = None) -> str:
     spec = shot.spec
     parts = []
     if project and project.style:
@@ -231,12 +255,30 @@ def _compose_prompt(project: Optional[Project], shot: Shot) -> str:
                  if c.get("description") else str(c.get("name", ""))
                  for c in spec.characters]
         parts.append("角色: " + "; ".join(descs))
+    # 观测态续接：上一镜的实际末态优先于任何计划描述
+    if prev_shot is not None and prev_shot.spec.observed_end_state:
+        parts.append(f"开场接续上一镜实际末态: {prev_shot.spec.observed_end_state}")
     if spec.action:
         parts.append(spec.action)
     if spec.dialogue:
         parts.append(f"台词: {spec.dialogue}")
     if spec.camera:
         parts.append("镜头: " + ", ".join(f"{k}={v}" for k, v in spec.camera.items()))
+    # 三桶节拍：已演不重演、未来不泄露
+    beats = spec.beats or {}
+    already = [str(b) for b in beats.get("already_happened") or [] if str(b).strip()]
+    if already:
+        parts.append("以下情节已发生，不要重演: " + "；".join(already))
+    reserved = [str(b) for b in beats.get("reserved_for_later") or [] if str(b).strip()]
+    if reserved:
+        parts.append("不要提前出现: " + "；".join(reserved))
+    # 多人三层动作层级：非焦点人物只允许微动
+    if len(spec.characters) >= 2:
+        parts.append("非焦点人物保持自然微动(呼吸/眨眼)，不得擅自起身/走动/拿取物品；"
+                     "只有焦点角色执行主要动作")
+    # Source-Carries-State：外观与场景由参考图承载，文字只写动作与变化
+    if spec.reference_assets:
+        parts.append("参考图已包含角色外观与场景，请严格保持，文字仅描述动作与变化")
     prompt = " | ".join(parts) or f"shot {shot.shot_id}"
     # 视频模型生成文字会乱码：固定追加禁文字约束（乱码治理）
     return prompt + " | " + _NO_TEXT_SUFFIX
@@ -582,9 +624,16 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                 if r.input_hash == body.command_id:
                     return r        # same command_id: return the existing run
         project = store.get("projects", shot.project_id)
+        # 同场景前一镜（order 小 1）的观测末态用于续接
+        prev_shot = None
+        if shot.order > 0:
+            prev_shot = next(
+                (s for s in store.all("shots", scene_id=shot.scene_id)
+                 if s.order == shot.order - 1 and s.shot_id != shot.shot_id),
+                None)
         run = Run(shot_id=shot.shot_id, project_id=shot.project_id,
                   seed=body.seed if body.seed is not None else settings.DEFAULT_SEED,
-                  prompt_spec=_compose_prompt(project, shot),
+                  prompt_spec=_compose_prompt(project, shot, prev_shot),
                   input_hash=body.command_id,
                   max_repairs=(body.max_repairs if body.max_repairs is not None
                                else settings.MAX_REPAIRS))
@@ -601,6 +650,21 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         store.transition_run(run.run_id, "PROMPT_READY",
                              ev("prompt.ready", run.prompt_spec[:200]))
         store.transition_run(run.run_id, "QUEUED", ev("step.queued"))
+        # 密度负载 / 裸情绪词静态检查：不减内容、不改写，只记警告事件
+        load = density_score(shot.spec)
+        hits = emotion_hits(shot.spec)
+        if load > settings.DENSITY_LIMIT or hits:
+            advice = ("建议拆分镜头" if load > settings.DENSITY_LIMIT else "")
+            if hits:
+                advice += ("；" if advice else "") + \
+                    "裸情绪词无画面载体: " + ",".join(hits)
+            store.append_event(Event(
+                project_id=run.project_id, run_id=run.run_id,
+                attempt_id=run.attempt_id, type="density.warning",
+                actor="orchestrator",
+                summary=f"load={load:.1f}/{settings.DENSITY_LIMIT} {advice}",
+                progress={"load": load, "limit": settings.DENSITY_LIMIT,
+                          "emotion_words": hits}))
         return store.get("runs", run.run_id)
 
     # ------------------------------------------------------------ run control --
