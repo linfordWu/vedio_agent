@@ -184,6 +184,11 @@ async function loadProject(id) {
     connectSSE();
   } catch (err) {
     toast('加载项目失败:' + err.message, 'err');
+    // 本地记录的项目可能已被删除,清除后回退到列表中的第一个
+    localStorage.removeItem('svf_current');
+    state.currentProjectId = null;
+    const fallback = getRecentProjects().find((p) => p.id !== id);
+    if (fallback) loadProject(fallback.id);
   }
 }
 
@@ -921,9 +926,28 @@ setInterval(() => {
 }, 1000);
 
 /* ---------- 启动 ---------- */
-renderRecentProjects();
-if (state.currentProjectId) {
-  loadProject(state.currentProjectId);
-} else {
-  setSSEStatus('off', '未连接');
+async function init() {
+  // 先从后端拉项目列表合并进本地记录,避免换浏览器/清缓存后看不到项目
+  try {
+    const res = await api('/projects');
+    const serverProjects = res.projects || [];
+    const merged = getRecentProjects();
+    serverProjects.forEach((p) => {
+      const id = p.project_id || p.id;
+      if (id && !merged.some((x) => x.id === id)) merged.push({ id, title: p.title || id });
+    });
+    localStorage.setItem('svf_projects', JSON.stringify(merged.slice(0, 50)));
+  } catch (err) {
+    // 后端不可达时退回本地缓存
+  }
+  renderRecentProjects();
+  const list = getRecentProjects();
+  if (state.currentProjectId) {
+    loadProject(state.currentProjectId);
+  } else if (list.length) {
+    loadProject(list[0].id);
+  } else {
+    setSSEStatus('off', '未连接');
+  }
 }
+init();

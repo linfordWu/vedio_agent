@@ -183,6 +183,12 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         return obj
 
     # ------------------------------------------------------------ projects --
+    @app.get("/projects")
+    def list_projects() -> dict:
+        projects = sorted(store.all("projects"),
+                          key=lambda p: p.created_at, reverse=True)
+        return {"projects": projects}
+
     @app.post("/projects", status_code=201)
     def create_project(body: ProjectCreate) -> Project:
         project = Project(title=body.title, style=body.style, brief=body.brief,
