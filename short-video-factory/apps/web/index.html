@@ -3,261 +3,159 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>短视频工厂 · 工作台</title>
-<link rel="stylesheet" href="./style.css?v=7">
+<title>短剧工坊 · 本地片场</title>
+<link rel="stylesheet" href="./style.css?v=10">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">
-    <span class="brand-mark">▣</span>
-    <span class="brand-name">短视频工厂</span>
-    <span class="brand-sub">FACTORY CONSOLE</span>
-  </div>
-  <div class="topbar-right">
-    <span id="sse-indicator" class="sse-indicator sse-off" title="事件流连接状态">● 事件流:未连接</span>
-    <span id="current-project-label" class="current-project-label">未选择项目</span>
-  </div>
-</header>
 
-<nav class="tabs">
-  <button class="tab-btn active" data-tab="tab-project">项目与素材</button>
-  <button class="tab-btn" data-tab="tab-director">导演台</button>
-  <button class="tab-btn" data-tab="tab-shots">分镜镜头</button>
-  <button class="tab-btn" data-tab="tab-assets">素材库</button>
-  <button class="tab-btn" data-tab="tab-generate">视频生成</button>
-  <button class="tab-btn" data-tab="tab-monitor">任务监控</button>
-  <button class="tab-btn" data-tab="tab-review">审核</button>
-</nav>
-
-<main class="main">
-
-  <!-- ============ 页签一:项目与素材 ============ -->
-  <section id="tab-project" class="tab-pane active">
-    <div class="quick-create panel">
-      <div class="quick-modes">
-        <button class="quick-mode-pill active" data-mode="text">文生视频</button>
-        <button class="quick-mode-pill" data-mode="assets">素材+文案</button>
-      </div>
-      <textarea id="quick-brief" class="quick-textarea" rows="4" placeholder="描述你想要的短剧,例如:深夜女孩收到一封神秘来信…"></textarea>
-      <div id="quick-asset-picker" class="quick-asset-picker hidden"></div>
-      <div class="quick-controls">
-        <label class="quick-field">时长(秒)
-          <input type="number" id="quick-duration" min="1" value="60">
-        </label>
-        <label class="quick-field">风格(可选)
-          <input type="text" id="quick-style" placeholder="电影感 / 清新 / 悬疑…">
-        </label>
-        <button id="quick-create-btn" class="btn btn-accent btn-lg">一键成片</button>
+<!-- ============ 视图一:片库 Dashboard #/ ============ -->
+<section id="view-dashboard" class="view">
+  <header class="hero">
+    <div class="hero-left">
+      <div class="hero-eyebrow"><span class="hero-clap">▣</span> 短剧工坊 · LOCAL PRODUCTION DESK</div>
+      <h1 class="hero-title">把一个想法,<br>变成一部完整短剧。</h1>
+      <p class="hero-sub">从剧本构思,到角色、场景、道具与分镜视频,再经本机剪辑导出成片——覆盖完整的六步制片流程。</p>
+    </div>
+    <div class="hero-right">
+      <div class="hero-perforation"></div>
+      <div class="hero-right-inner">
+        <div class="timecode hero-pipeline">PIPELINE / 06 STAGES</div>
+        <ol class="hero-steps">
+          <li><span class="timecode">01</span>剧本</li>
+          <li><span class="timecode">02</span>角色</li>
+          <li><span class="timecode">03</span>场景</li>
+          <li><span class="timecode">04</span>道具</li>
+          <li><span class="timecode">05</span>分镜</li>
+          <li><span class="timecode">06</span>剪辑</li>
+        </ol>
+        <button id="db-new-btn" class="btn btn-projector btn-lg">+ 建立新片场</button>
       </div>
     </div>
-    <div class="pane-grid">
-      <div class="panel">
-        <details class="manual-create">
-          <summary class="panel-title manual-create-summary">手动创建项目(高级)</summary>
-          <form id="create-project-form" class="form">
-            <label>项目标题
-              <input type="text" name="title" required placeholder="例如:夏日冰饮 15s 种草短视频">
-            </label>
-            <label>风格
-              <input type="text" name="style" placeholder="例如:清新 / 快节奏 / 电影感">
-            </label>
-            <label>创意简报
-              <textarea name="brief" rows="4" placeholder="目标受众、卖点、调性、必须出现的元素…"></textarea>
-            </label>
-            <label>目标时长(秒)
-              <input type="number" name="duration_target_s" min="1" value="15">
-            </label>
-            <button type="submit" class="btn btn-primary">创建项目</button>
-          </form>
-        </details>
+  </header>
 
-        <h2 class="panel-title" style="margin-top:24px">打开已有项目</h2>
-        <div class="form-inline">
-          <input type="text" id="open-project-id" placeholder="输入项目 ID">
-          <button id="open-project-btn" class="btn">加载</button>
-        </div>
-        <ul id="recent-projects" class="recent-projects"></ul>
-
-        <div id="project-summary" class="project-summary hidden"></div>
-        <button id="plan-btn" class="btn btn-accent hidden">生成剧本分镜(异步)</button>
-      </div>
-
-      <div class="panel">
-        <h2 class="panel-title">素材上传</h2>
-        <div id="dropzone" class="dropzone">
-          <p>拖拽文件到此处,或</p>
-          <input type="file" id="file-input" multiple accept="image/*,video/*">
-          <p class="dropzone-hint">支持多选;图片 / 视频;自动分块上传</p>
-        </div>
-        <ul id="upload-list" class="upload-list"></ul>
-
-        <div class="panel-title-row">
-          <h2 class="panel-title">素材库</h2>
-          <button id="refresh-assets-btn" class="btn btn-small">刷新</button>
-        </div>
-        <div id="asset-grid" class="asset-grid">
-          <p class="empty-hint">暂无素材</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ 页签:导演台 ============ -->
-  <section id="tab-director" class="tab-pane">
-    <div class="pane-grid pane-grid-wide-left">
-      <div class="panel">
-        <h2 class="panel-title">角色与地点登记</h2>
-        <form id="character-form" class="form">
-          <label>名称
-            <input type="text" name="name" required placeholder="例如:女主角小林 / 海边咖啡馆">
-          </label>
-          <label>类型
-            <select name="kind">
-              <option value="character">角色</option>
-              <option value="location">地点</option>
-            </select>
-          </label>
-          <label>外观描述
-            <textarea name="description" rows="3" placeholder="外貌、服装、气质 / 场景环境、氛围…"></textarea>
-          </label>
-          <label>参考图(可选,从素材库选图片)
-            <select name="asset_id" id="character-asset-select">
-              <option value="">不使用参考图</option>
-            </select>
-          </label>
-          <button type="submit" class="btn btn-primary">登记</button>
-        </form>
-
-        <div class="panel-title-row" style="margin-top:20px">
-          <h2 class="panel-title">已登记角色 / 地点</h2>
-          <div>
-            <button id="portraits-btn" class="btn btn-small btn-accent" title="为缺参考图的角色用 Qwen-Image 自动生成定妆照">生成定妆照</button>
-            <button id="refresh-characters-btn" class="btn btn-small">刷新</button>
-          </div>
-        </div>
-        <div id="character-table-wrap">
-          <p class="empty-hint">请先加载项目</p>
-        </div>
-      </div>
-
+  <div class="db-section">
+    <div class="db-section-head">
       <div>
-        <div class="panel">
-          <div class="panel-title-row">
-            <h2 class="panel-title">连贯性审核</h2>
-            <button id="director-review-btn" class="btn btn-accent">发起审核</button>
+        <div class="label">PRODUCTION ARCHIVE</div>
+        <h2 class="section-title">本地项目</h2>
+      </div>
+      <input type="text" id="db-search" class="field db-search" placeholder="搜索片名或题材…">
+    </div>
+    <div id="db-grid" class="db-grid">
+      <div class="panel db-empty">正在读取本地片库…</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 视图二:建立片场 #/new ============ -->
+<section id="view-new" class="view hidden">
+  <header class="hero hero-slim">
+    <div class="hero-left">
+      <a href="#/" class="hero-back">← 返回片库</a>
+      <h1 class="hero-title hero-title-sm">建立一座新片场</h1>
+      <p class="hero-sub">先确定故事方向与统一画面语言。建立后立即触发 AI 规划,从剧本开始推进六步流程。</p>
+    </div>
+  </header>
+
+  <div class="new-layout">
+    <div class="new-main">
+      <div class="panel new-panel">
+        <div class="label">BASIC SETUP</div>
+        <h2 class="panel-heading">故事身份</h2>
+        <label class="form-label">片名
+          <input type="text" id="nf-title" class="field" placeholder="例如:雨夜最后一班车">
+        </label>
+        <div class="form-label">题材
+          <div id="nf-genres" class="pill-row">
+            <button class="preset-pill active" data-value="都市情感">都市情感</button>
+            <button class="preset-pill" data-value="悬疑">悬疑</button>
+            <button class="preset-pill" data-value="逆袭">逆袭</button>
+            <button class="preset-pill" data-value="甜宠">甜宠</button>
+            <button class="preset-pill" data-value="古装">古装</button>
+            <button class="preset-pill" data-value="科幻">科幻</button>
           </div>
-          <div id="director-review-status" class="toolbar-hint"></div>
-          <div id="director-review-report" style="margin-top:10px">
-            <p class="empty-hint">暂无审核报告</p>
+          <input type="text" id="nf-genre-custom" class="field" placeholder="自定义题材(填写后优先于预设)">
+        </div>
+        <div class="form-label">视觉风格
+          <div id="nf-styles" class="pill-row">
+            <button class="preset-pill" data-value="吉卜力手绘">吉卜力手绘</button>
+            <button class="preset-pill active" data-value="写实电影感">写实电影感</button>
+            <button class="preset-pill" data-value="日系动漫">日系动漫</button>
+            <button class="preset-pill" data-value="水彩绘本">水彩绘本</button>
+            <button class="preset-pill" data-value="赛博朋克">赛博朋克</button>
+            <button class="preset-pill" data-value="复古胶片">复古胶片</button>
           </div>
         </div>
+      </div>
 
-        <div class="panel" style="margin-top:20px">
-          <h2 class="panel-title">使用提示</h2>
-          <p class="director-tip">在这里登记角色与地点并绑定参考图后,生成剧本分镜与提交镜头生成时会自动把角色的外观描述和参考图注入提示词,保证同一角色在所有镜头中形象一致、场景不跑偏。登记完成后可点击「发起审核」,由导演 Agent 检查剧情连贯、人物一致性与穿帮问题。</p>
-        </div>
+      <div class="panel new-panel">
+        <div class="label">STORY BRIEF</div>
+        <h2 class="panel-heading">创作想法 / 原始故事</h2>
+        <textarea id="nf-brief" class="field new-brief" rows="10" placeholder="描述你想要的短剧:主角设定、核心矛盾、身份反转、逆袭路径、关键场景…一句话也可以,AI 会帮你补全成完整剧本。"></textarea>
       </div>
     </div>
-  </section>
 
-  <!-- ============ 页签二:分镜镜头 ============ -->
-  <section id="tab-shots" class="tab-pane">
-    <div class="pane-toolbar">
-      <button id="refresh-shots-btn" class="btn">刷新分镜</button>
-      <span class="toolbar-hint">分镜由「项目与素材 → 生成剧本分镜」异步产生;点击镜头卡片查看详情</span>
-    </div>
-    <div id="scenes-container" class="scenes-container">
-      <p class="empty-hint">暂无分镜数据,请先加载项目</p>
-    </div>
-    <div id="shot-detail" class="shot-detail hidden"></div>
-  </section>
-
-  <!-- ============ 页签:素材库 ============ -->
-  <section id="tab-assets" class="tab-pane">
-    <div class="pane-toolbar">
-      <select id="al-project-filter" class="al-select">
-        <option value="">全部项目</option>
-        <option value="__current">当前项目</option>
-      </select>
-      <select id="al-type-filter" class="al-select">
-        <option value="">全部类型</option>
-        <option value="image">图片</option>
-        <option value="video">视频</option>
-        <option value="audio">音频</option>
-      </select>
-      <button id="al-classify-btn" class="btn btn-accent">自动分类</button>
-      <span id="al-hint" class="toolbar-hint"></span>
-    </div>
-    <div id="al-cat-nav" class="al-cat-nav"></div>
-    <div id="al-grid" class="asset-grid al-grid">
-      <p class="empty-hint">切换到本页签后自动加载素材</p>
-    </div>
-    <div id="al-overlay" class="al-overlay hidden"></div>
-  </section>
-
-  <!-- ============ 页签三:视频生成 ============ -->
-  <section id="tab-generate" class="tab-pane">
-    <div class="pane-toolbar">
-      <button id="export-btn" class="btn btn-accent" disabled>导出成片</button>
-      <span id="export-hint" class="toolbar-hint">全部镜头验收通过后可用</span>
-    </div>
-    <div id="export-result" class="export-result"></div>
-    <div class="pane-grid pane-grid-wide-left">
-      <div class="panel">
-        <div class="panel-title-row">
-          <h2 class="panel-title">生成任务(Runs)</h2>
-          <button id="refresh-runs-btn" class="btn btn-small">刷新</button>
+    <aside class="new-aside">
+      <div class="panel new-panel">
+        <div class="label">FRAME</div>
+        <h2 class="panel-heading">画幅</h2>
+        <div class="ratio-row">
+          <button id="nf-ratio-916" class="ratio-btn active" data-value="9:16">
+            <span class="ratio-box ratio-portrait"></span>9:16 竖屏
+          </button>
+          <button id="nf-ratio-169" class="ratio-btn" data-value="16:9">
+            <span class="ratio-box ratio-landscape"></span>16:9 横屏
+          </button>
         </div>
-        <div id="run-list" class="run-list">
-          <p class="empty-hint">暂无生成任务</p>
-        </div>
-        <div id="run-detail" class="run-detail hidden"></div>
+        <label class="form-label" style="margin-top:14px">目标时长(秒)
+          <input type="number" id="nf-duration" class="field" min="1" value="60">
+        </label>
       </div>
-      <div class="panel">
-        <div class="panel-title-row">
-          <h2 class="panel-title">实时事件流</h2>
-          <button id="clear-events-btn" class="btn btn-small">清空</button>
-        </div>
-        <div id="event-stream" class="event-stream">
-          <p class="empty-hint">等待事件…</p>
-        </div>
+      <div class="panel new-panel">
+        <button id="nf-create-btn" class="btn btn-projector btn-lg btn-block">建立并进入剧本</button>
+        <p class="new-note">建立项目会立即触发 AI 规划(剧本/角色/场景),进入剧本步后可随时重新规划。</p>
       </div>
-    </div>
-  </section>
+    </aside>
+  </div>
 
-  <!-- ============ 页签四:任务监控 ============ -->
-  <section id="tab-monitor" class="tab-pane">
-    <div class="pane-toolbar">
-      <button id="refresh-monitor-btn" class="btn">刷新</button>
-      <span class="toolbar-hint">导出成片已移至「视频生成」页签</span>
+  <div class="panel new-panel quick-panel">
+    <div class="label">QUICK CUT</div>
+    <h2 class="panel-heading">一键成片</h2>
+    <p class="new-note">跳过六步,直接由一段描述(可加参考素材)生成完整短剧项目。</p>
+    <div class="pill-row" style="margin:10px 0">
+      <button class="preset-pill qk-mode-pill active" data-mode="text">文生视频</button>
+      <button class="preset-pill qk-mode-pill" data-mode="assets">素材+文案</button>
     </div>
-    <table class="run-table">
-      <thead>
-        <tr>
-          <th>Run ID</th><th>镜头</th><th>状态</th><th>评分</th>
-          <th>耗时</th><th>重试</th><th>失败原因</th><th>操作</th>
-        </tr>
-      </thead>
-      <tbody id="monitor-tbody">
-        <tr><td colspan="8" class="empty-hint">暂无任务</td></tr>
-      </tbody>
-    </table>
-  </section>
-
-  <!-- ============ 页签五:审核 ============ -->
-  <section id="tab-review" class="tab-pane">
-    <div class="pane-toolbar">
-      <button id="refresh-review-btn" class="btn">刷新</button>
-      <button id="accept-all-btn" class="btn btn-accent">一键接受全部待审</button>
-      <span id="review-hint" class="toolbar-hint"></span>
+    <textarea id="qk-brief" class="field" rows="3" placeholder="描述你想要的短剧,例如:深夜女孩收到一封神秘来信…"></textarea>
+    <div id="qk-picker" class="quick-asset-picker hidden"></div>
+    <div class="quick-controls">
+      <label class="quick-field">时长(秒)<input type="number" id="qk-duration" class="field" min="1" value="60"></label>
+      <label class="quick-field">风格(可选)<input type="text" id="qk-style" class="field" placeholder="电影感 / 清新 / 悬疑…"></label>
+      <button id="qk-btn" class="btn btn-projector btn-lg">一键成片</button>
     </div>
-    <div id="review-list" class="review-list"></div>
-  </section>
+  </div>
+</section>
 
-</main>
+<!-- ============ 视图三:工作室 #/studio/{id}?step=xxx ============ -->
+<section id="view-studio" class="view hidden">
+  <div id="studio-root" class="studio-root">
+    <div class="studio-loading"><span class="spinner"></span> 正在开机片场…</div>
+  </div>
+</section>
+
+<!-- SSE 事件抽屉 -->
+<div id="sse-drawer" class="sse-drawer hidden">
+  <div class="sse-drawer-head">
+    <span>实时事件流</span>
+    <button id="sse-drawer-close" class="btn btn-ghost btn-small">关闭 ✕</button>
+  </div>
+  <div id="sse-drawer-list" class="sse-drawer-list">
+    <p class="empty-hint">等待事件…</p>
+  </div>
+</div>
 
 <div id="toast-container" class="toast-container"></div>
 
-<script src="./app.js?v=9"></script>
+<script src="./app.js?v=10"></script>
 </body>
 </html>

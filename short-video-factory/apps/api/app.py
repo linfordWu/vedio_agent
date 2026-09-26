@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -29,6 +29,7 @@ from ...domain.schemas.core import (
     ASSET_CATEGORIES, Acceptance, Asset, AssetBinding, AssetCategory, Character,
     Event, Project, RepairPlan, Run, Scene, Shot, ShotSpec, new_id, now_ts,
 )
+from ...domain.state_machine.machine import TERMINAL
 from ...ingestion.uploader import Uploader, UploadError
 from ...quality.density import density_score, emotion_hits
 from ...workers.engine import WorkerEngine
@@ -92,6 +93,20 @@ class CharacterCreate(BaseModel):
 
 class ShotCharactersBind(BaseModel):
     character_ids: list[str]
+
+
+class CharacterPatch(BaseModel):
+    """角色卡片就地编辑;None 字段不动,空串 asset_id 表示清除参考图。"""
+    description: Optional[str] = None
+    asset_id: Optional[str] = None
+
+
+class ShotPatch(BaseModel):
+    """分镜页生成前的部分编辑；None 字段不动。"""
+    action: Optional[str] = None
+    dialogue: Optional[str] = None
+    duration_s: Optional[int] = None
+    camera: Optional[dict[str, str]] = None
 
 
 class ExportRequest(BaseModel):
@@ -345,9 +360,35 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
     # ------------------------------------------------------------ projects --
     @app.get("/projects")
     def list_projects() -> dict:
+        """项目列表 + 六步进度聚合（一次性查表，内存聚合，避免 N+1）。"""
         projects = sorted(store.all("projects"),
                           key=lambda p: p.created_at, reverse=True)
-        return {"projects": projects}
+        scenes = store.all("scenes")
+        shots = store.all("shots")
+        runs = store.all("runs")
+        chars = store.all("characters")
+        assets = store.all("assets")
+        out = []
+        for p in projects:
+            pid = p.project_id
+            p_shots = [s for s in shots if s.project_id == pid]
+            p_chars = [c for c in chars if c.project_id == pid]
+            progress = {
+                "scenes": sum(1 for s in scenes if s.project_id == pid),
+                "shots": len(p_shots),
+                "runs": sum(1 for r in runs if r.project_id == pid),
+                "accepted": sum(1 for s in p_shots if s.accepted_run_id),
+                "characters": sum(1 for c in p_chars if c.kind == "character"),
+                "locations": sum(1 for c in p_chars if c.kind == "location"),
+                "portraits": sum(1 for c in p_chars if c.asset_id),
+                "props": sum(1 for a in assets
+                             if a.project_id == pid and a.category == "prop"),
+                "exports": sum(1 for a in assets
+                               if a.project_id == pid and a.source == "derived"
+                               and a.media_type == "video"),
+            }
+            out.append({**p.model_dump(), "progress": progress})
+        return {"projects": out}
 
     @app.post("/projects", status_code=201)
     def create_project(body: ProjectCreate) -> Project:
@@ -360,13 +401,33 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         return project
 
     @app.post("/projects/{project_id}/plan", status_code=202)
-    def plan_project(project_id: str) -> dict:
+    def plan_project(project_id: str, force: bool = False) -> dict:
         project = _get_or_404("projects", project_id)
         if text_model is None:
             raise HTTPException(503, "text model not configured")
         existing = store.all("scenes", project_id=project_id)
-        if existing:
+        if existing and not force:
             return {"status": "planned", "scenes": len(existing)}
+        if existing:
+            # force 重新规划：取消未终结 runs，删旧 shots/scenes（events 保留）
+            for run in store.all("runs", project_id=project_id):
+                if run.state in TERMINAL:
+                    continue
+                try:
+                    engine.cancel_run(run.run_id)
+                except (ValueError, KeyError):
+                    # 瞬态（GENERATED 等）状态机不许 cancel，直接落 CANCELLED
+                    fresh = store.get("runs", run.run_id)
+                    if fresh is not None and fresh.state not in TERMINAL:
+                        fresh.state = "CANCELLED"
+                        fresh.updated_at = now_ts()
+                        store.put("runs", fresh)
+            for shot in store.all("shots", project_id=project_id):
+                store.delete("shots", shot.shot_id)
+            for scene in existing:
+                store.delete("scenes", scene.scene_id)
+            store.append_event(Event(project_id=project_id, type="plan.reset",
+                                     actor="api", summary="force re-plan"))
         threading.Thread(target=_run_plan, args=(store, text_model, project),
                          name=f"svf-plan-{project_id}", daemon=True).start()
         return {"status": "planning"}
@@ -468,6 +529,26 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                            "runs": len(runs),
                            "accepted": sum(1 for s in shots if s.accepted_run_id)}}
 
+    @app.delete("/projects/{project_id}")
+    def delete_project(project_id: str) -> dict:
+        """删除项目全部记录;素材与成片媒体文件保留在磁盘(单机资产不物理删除)。"""
+        _get_or_404("projects", project_id)
+        removed = {}
+        for table in ("runs", "shots", "scenes", "characters",
+                      "director_reviews"):
+            rows = store.all(table, project_id=project_id)
+            pk = {"runs": "run_id", "shots": "shot_id", "scenes": "scene_id",
+                  "characters": "character_id",
+                  "director_reviews": "report_id"}[table]
+            for row in rows:
+                store.delete(table, getattr(row, pk))
+            removed[table] = len(rows)
+        store.delete("projects", project_id)
+        store.append_event(Event(project_id=project_id, type="project.deleted",
+                                 actor="api",
+                                 summary=str(removed)))
+        return {"deleted": project_id, "removed": removed}
+
     # -------------------------------------------------------------- uploads --
     @app.post("/assets/uploads", status_code=201)
     def create_upload(body: UploadCreate):
@@ -546,20 +627,12 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         if not asset.storage_key:
             raise HTTPException(404, "asset has no stored file")
         path = asset_store.path_for(asset.storage_key)
-
-        def stream():
-            with open(path, "rb") as f:
-                while True:
-                    chunk = f.read(1 << 20)
-                    if not chunk:
-                        break
-                    yield chunk
-
         filename = asset.metadata.get("original_filename", "file")
-        return StreamingResponse(
-            stream(), media_type=_MEDIA_MIME.get(asset.media_type,
-                                                 "application/octet-stream"),
-            headers={"Content-Disposition": f'inline; filename="{filename}"'})
+        # FileResponse 自带 HTTP Range 支持（starlette>=1.0，视频拖动返回 206）
+        return FileResponse(
+            path, media_type=_MEDIA_MIME.get(asset.media_type,
+                                             "application/octet-stream"),
+            filename=filename, content_disposition_type="inline")
 
     # ----------------------------------------------------------- characters --
     @app.get("/projects/{project_id}/characters")
@@ -580,6 +653,21 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         store.put("characters", ch)
         store.append_event(Event(project_id=project_id, type="character.created",
                                  actor="api", summary=f"{ch.kind}: {ch.name}"))
+        return ch
+
+    @app.patch("/characters/{character_id}")
+    def patch_character(character_id: str, body: CharacterPatch) -> Character:
+        ch = _get_or_404("characters", character_id)
+        if body.description is not None:
+            ch.description = body.description
+        if body.asset_id is not None:
+            if body.asset_id:
+                _get_or_404("assets", body.asset_id)
+            ch.asset_id = body.asset_id
+        store.put("characters", ch)
+        store.append_event(Event(project_id=ch.project_id,
+                                 type="character.updated", actor="api",
+                                 summary=ch.name))
         return ch
 
     @app.delete("/characters/{character_id}")
@@ -608,6 +696,36 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         store.append_event(Event(project_id=shot.project_id,
                                  type="shot.characters_bound", actor="api",
                                  summary=", ".join(c.name for c in chars)))
+        return shot
+
+    @app.patch("/shots/{shot_id}")
+    def patch_shot(shot_id: str, body: ShotPatch) -> Shot:
+        """部分更新 shot.spec（分镜页生成前编辑）。"""
+        shot = _get_or_404("shots", shot_id)
+        if body.action is not None:
+            shot.spec.action = body.action
+        if body.dialogue is not None:
+            shot.spec.dialogue = body.dialogue
+        if body.duration_s is not None:
+            shot.spec.duration_s = body.duration_s
+        if body.camera is not None:
+            shot.spec.camera = {str(k): str(v) for k, v in body.camera.items()}
+        store.put("shots", shot)
+        store.append_event(Event(project_id=shot.project_id, type="shot.updated",
+                                 actor="api", summary=shot.shot_id))
+        return shot
+
+    @app.delete("/shots/{shot_id}/references/{asset_id}")
+    def remove_shot_reference(shot_id: str, asset_id: str) -> Shot:
+        """从 spec.reference_assets 移除指定参考图（不存在则幂等不动）。"""
+        shot = _get_or_404("shots", shot_id)
+        if asset_id in shot.spec.reference_assets:
+            shot.spec.reference_assets = [
+                a for a in shot.spec.reference_assets if a != asset_id]
+            store.put("shots", shot)
+            store.append_event(Event(project_id=shot.project_id,
+                                     type="shot.reference_removed", actor="api",
+                                     summary=asset_id))
         return shot
 
     # ----------------------------------------------------------- shot wiring --
