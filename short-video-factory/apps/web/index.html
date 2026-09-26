@@ -4,9 +4,22 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>短剧工坊 · 本地片场</title>
-<link rel="stylesheet" href="./style.css?v=10">
+<script>
+// 主题引导:先读 localStorage,缺省跟随系统;避免首屏闪烁
+(function () {
+  var t = null;
+  try { t = localStorage.getItem('svf-theme'); } catch (e) { /* ignore */ }
+  if (t !== 'light' && t !== 'dark') {
+    t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  document.documentElement.dataset.theme = t;
+})();
+</script>
+<link rel="stylesheet" href="./style.css?v=11">
 </head>
 <body>
+
+<button id="theme-toggle" class="theme-toggle" title="切换夜间模式" aria-label="切换夜间模式">🌙</button>
 
 <!-- ============ 视图一:片库 Dashboard #/ ============ -->
 <section id="view-dashboard" class="view">
@@ -156,6 +169,6 @@
 
 <div id="toast-container" class="toast-container"></div>
 
-<script src="./app.js?v=10"></script>
+<script src="./app.js?v=11"></script>
 </body>
 </html>

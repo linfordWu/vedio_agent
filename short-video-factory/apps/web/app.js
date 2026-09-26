@@ -115,6 +115,24 @@ function categoryLabel(cat) {
   return CATEGORY_MAP[cat] || cat;
 }
 
+/* ---------- 主题切换(初始主题由 index.html 内联脚本先行设置) ---------- */
+(function bindThemeToggle() {
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  function syncIcon() {
+    const dark = document.documentElement.dataset.theme === 'dark';
+    btn.textContent = dark ? '☀' : '🌙';
+    btn.title = dark ? '切换到日间模式' : '切换到夜间模式';
+  }
+  btn.addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem('svf-theme', next); } catch (e) { /* ignore */ }
+    syncIcon();
+  });
+  syncIcon();
+})();
+
 /* ---------- API ---------- */
 async function api(path, opts) {
   opts = opts || {};
