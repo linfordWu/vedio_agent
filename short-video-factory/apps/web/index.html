@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>短视频工厂 · 工作台</title>
-<link rel="stylesheet" href="./style.css?v=6">
+<link rel="stylesheet" href="./style.css?v=7">
 </head>
 <body>
 <header class="topbar">
@@ -23,6 +23,7 @@
   <button class="tab-btn active" data-tab="tab-project">项目与素材</button>
   <button class="tab-btn" data-tab="tab-director">导演台</button>
   <button class="tab-btn" data-tab="tab-shots">分镜镜头</button>
+  <button class="tab-btn" data-tab="tab-assets">素材库</button>
   <button class="tab-btn" data-tab="tab-generate">视频生成</button>
   <button class="tab-btn" data-tab="tab-monitor">任务监控</button>
   <button class="tab-btn" data-tab="tab-review">审核</button>
@@ -32,24 +33,43 @@
 
   <!-- ============ 页签一:项目与素材 ============ -->
   <section id="tab-project" class="tab-pane active">
+    <div class="quick-create panel">
+      <div class="quick-modes">
+        <button class="quick-mode-pill active" data-mode="text">文生视频</button>
+        <button class="quick-mode-pill" data-mode="assets">素材+文案</button>
+      </div>
+      <textarea id="quick-brief" class="quick-textarea" rows="4" placeholder="描述你想要的短剧,例如:深夜女孩收到一封神秘来信…"></textarea>
+      <div id="quick-asset-picker" class="quick-asset-picker hidden"></div>
+      <div class="quick-controls">
+        <label class="quick-field">时长(秒)
+          <input type="number" id="quick-duration" min="1" value="60">
+        </label>
+        <label class="quick-field">风格(可选)
+          <input type="text" id="quick-style" placeholder="电影感 / 清新 / 悬疑…">
+        </label>
+        <button id="quick-create-btn" class="btn btn-accent btn-lg">一键成片</button>
+      </div>
+    </div>
     <div class="pane-grid">
       <div class="panel">
-        <h2 class="panel-title">创建项目</h2>
-        <form id="create-project-form" class="form">
-          <label>项目标题
-            <input type="text" name="title" required placeholder="例如:夏日冰饮 15s 种草短视频">
-          </label>
-          <label>风格
-            <input type="text" name="style" placeholder="例如:清新 / 快节奏 / 电影感">
-          </label>
-          <label>创意简报
-            <textarea name="brief" rows="4" placeholder="目标受众、卖点、调性、必须出现的元素…"></textarea>
-          </label>
-          <label>目标时长(秒)
-            <input type="number" name="duration_target_s" min="1" value="15">
-          </label>
-          <button type="submit" class="btn btn-primary">创建项目</button>
-        </form>
+        <details class="manual-create">
+          <summary class="panel-title manual-create-summary">手动创建项目(高级)</summary>
+          <form id="create-project-form" class="form">
+            <label>项目标题
+              <input type="text" name="title" required placeholder="例如:夏日冰饮 15s 种草短视频">
+            </label>
+            <label>风格
+              <input type="text" name="style" placeholder="例如:清新 / 快节奏 / 电影感">
+            </label>
+            <label>创意简报
+              <textarea name="brief" rows="4" placeholder="目标受众、卖点、调性、必须出现的元素…"></textarea>
+            </label>
+            <label>目标时长(秒)
+              <input type="number" name="duration_target_s" min="1" value="15">
+            </label>
+            <button type="submit" class="btn btn-primary">创建项目</button>
+          </form>
+        </details>
 
         <h2 class="panel-title" style="margin-top:24px">打开已有项目</h2>
         <div class="form-inline">
@@ -149,6 +169,29 @@
     <div id="shot-detail" class="shot-detail hidden"></div>
   </section>
 
+  <!-- ============ 页签:素材库 ============ -->
+  <section id="tab-assets" class="tab-pane">
+    <div class="pane-toolbar">
+      <select id="al-project-filter" class="al-select">
+        <option value="">全部项目</option>
+        <option value="__current">当前项目</option>
+      </select>
+      <select id="al-type-filter" class="al-select">
+        <option value="">全部类型</option>
+        <option value="image">图片</option>
+        <option value="video">视频</option>
+        <option value="audio">音频</option>
+      </select>
+      <button id="al-classify-btn" class="btn btn-accent">自动分类</button>
+      <span id="al-hint" class="toolbar-hint"></span>
+    </div>
+    <div id="al-cat-nav" class="al-cat-nav"></div>
+    <div id="al-grid" class="asset-grid al-grid">
+      <p class="empty-hint">切换到本页签后自动加载素材</p>
+    </div>
+    <div id="al-overlay" class="al-overlay hidden"></div>
+  </section>
+
   <!-- ============ 页签三:视频生成 ============ -->
   <section id="tab-generate" class="tab-pane">
     <div class="pane-toolbar">
@@ -212,6 +255,6 @@
 
 <div id="toast-container" class="toast-container"></div>
 
-<script src="./app.js?v=7"></script>
+<script src="./app.js?v=8"></script>
 </body>
 </html>

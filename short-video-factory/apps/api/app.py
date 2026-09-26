@@ -26,8 +26,8 @@ from pydantic import BaseModel
 from ...config import settings
 from ...domain.repositories.store import Store
 from ...domain.schemas.core import (
-    Acceptance, Asset, AssetBinding, Character, Event, Project, RepairPlan,
-    Run, Scene, Shot, ShotSpec, new_id, now_ts,
+    ASSET_CATEGORIES, Acceptance, Asset, AssetBinding, AssetCategory, Character,
+    Event, Project, RepairPlan, Run, Scene, Shot, ShotSpec, new_id, now_ts,
 )
 from ...ingestion.uploader import Uploader, UploadError
 from ...workers.engine import WorkerEngine
@@ -95,6 +95,19 @@ class ShotCharactersBind(BaseModel):
 
 class ExportRequest(BaseModel):
     subtitles: bool = True           # 有台词时烧录 SRT 字幕（重编码）
+
+
+class CategorySet(BaseModel):
+    category: AssetCategory
+
+
+class QuickCreate(BaseModel):
+    title: str = ""
+    brief: str                       # 创意文案（必填）
+    style: str = ""
+    duration_target_s: int = 60
+    mode: Literal["text", "assets"] = "text"
+    asset_ids: list[str] = []        # mode=assets 时选用的素材
 
 
 # -------------------------------------------------------------------- plan --
@@ -262,7 +275,7 @@ def _escape_filter_path(path: str) -> str:
 # --------------------------------------------------------------- application --
 def create_app(store: Store, asset_store, renderer=None, judge=None,
                decision=None, text_model=None, data_dir: Optional[str] = None,
-               start_worker: bool = True, reviewer=None,
+               start_worker: bool = True, reviewer=None, classifier=None,
                worker_poll_interval_s: float = 0.5) -> FastAPI:
     engine = WorkerEngine(store, asset_store, renderer=renderer, judge=judge,
                           decision=decision, text_model=text_model,
@@ -314,6 +327,58 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         threading.Thread(target=_run_plan, args=(store, text_model, project),
                          name=f"svf-plan-{project_id}", daemon=True).start()
         return {"status": "planning"}
+
+    # ---------------------------------------------------------------- quick --
+    @app.post("/projects/quick", status_code=201)
+    def quick_project(body: QuickCreate) -> dict:
+        """一键成片：建项目 + 后台线程编排（规划 -> 逐镜头建 run）。"""
+        if text_model is None:
+            raise HTTPException(503, "text model not configured")
+        assets = []
+        if body.mode == "assets":
+            for aid in body.asset_ids:
+                assets.append(_get_or_404("assets", aid))
+        project = Project(title=body.title or body.brief[:20], style=body.style,
+                          brief=body.brief,
+                          duration_target_s=body.duration_target_s)
+        store.put("projects", project)
+        store.append_event(Event(project_id=project.project_id,
+                                 type="project.created", actor="api",
+                                 summary=f"quick: {project.title}"))
+        threading.Thread(target=_run_quick, args=(project, body.mode, assets),
+                         name=f"svf-quick-{project.project_id}",
+                         daemon=True).start()
+        return {"project_id": project.project_id}
+
+    def _run_quick(project: Project, mode: str, assets: list[Asset]) -> None:
+        """后台编排：LLM 规划（分钟级）完成后自动为每个 shot 建 run。"""
+        pid = project.project_id
+        try:
+            store.append_event(Event(project_id=pid, type="quick.started",
+                                     actor="orchestrator", summary=mode))
+            _run_plan(store, text_model, project)
+            shots = sorted(store.all("shots", project_id=pid),
+                           key=lambda s: (s.scene_id, s.order))
+            # mode=assets：所有图片素材设进每个 shot 的 reference_assets
+            # （第一张为主参考，渲染只取第一张）；video 素材从简忽略
+            image_refs = [a.asset_id for a in assets if a.media_type == "image"]
+            runs = []
+            for shot in shots:
+                if mode == "assets" and image_refs:
+                    shot.spec.reference_assets = image_refs + [
+                        r for r in shot.spec.reference_assets
+                        if r not in image_refs]
+                    store.put("shots", shot)
+                runs.append(create_run(shot.shot_id, RunCreate()))
+            store.append_event(Event(project_id=pid, type="quick.orchestrated",
+                                     actor="orchestrator",
+                                     summary=f"{len(shots)} shots, "
+                                             f"{len(runs)} runs queued"))
+        except Exception as exc:
+            log.exception("quick orchestration failed for %s", pid)
+            store.append_event(Event(project_id=pid, type="quick.failed",
+                                     actor="orchestrator",
+                                     summary=str(exc)[:300]))
 
     @app.get("/projects/{project_id}")
     def get_project(project_id: str) -> dict:
@@ -373,10 +438,47 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
 
     # --------------------------------------------------------------- assets --
     @app.get("/assets")
-    def list_assets(project_id: Optional[str] = None) -> list:
+    def list_assets(project_id: Optional[str] = None,
+                    category: Optional[str] = None,
+                    media_type: Optional[str] = None) -> list:
+        where = {}
         if project_id:
-            return store.all("assets", project_id=project_id)
-        return store.all("assets")
+            where["project_id"] = project_id
+        if category:
+            where["category"] = category
+        if media_type:
+            where["media_type"] = media_type
+        return store.all("assets", **where)
+
+    @app.post("/assets/{asset_id}/category")
+    def set_asset_category(asset_id: str, body: CategorySet) -> Asset:
+        asset = _get_or_404("assets", asset_id)
+        asset.category = body.category
+        store.put("assets", asset)
+        store.append_event(Event(project_id=asset.project_id,
+                                 type="asset.categorized", actor="api",
+                                 summary=f"{asset.asset_id}: {body.category}"))
+        return asset
+
+    @app.post("/projects/{project_id}/assets/classify")
+    def classify_assets(project_id: str) -> dict:
+        _get_or_404("projects", project_id)
+        clf = classifier or _make_classifier()
+        classified = {}
+        for asset in store.all("assets", project_id=project_id):
+            if asset.category:
+                continue                # 只分类未分类素材
+            asset.category = clf.classify(asset)
+            store.put("assets", asset)
+            classified[asset.asset_id] = asset.category
+        store.append_event(Event(project_id=project_id, type="assets.classified",
+                                 actor="classifier",
+                                 summary=f"{len(classified)} assets classified"))
+        return {"classified": classified}
+
+    def _make_classifier():
+        from ...agents.classifier import LayaAssetClassifier
+        return LayaAssetClassifier()
 
     @app.get("/assets/{asset_id}/file")
     def get_asset_file(asset_id: str):

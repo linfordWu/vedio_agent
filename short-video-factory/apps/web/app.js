@@ -16,6 +16,13 @@ const state = {
   // run 客户端计时兜底 {run_id: {firstSeen, lastProgressAt, lastProgressLabel}}
   runClocks: {},
   events: [],
+  // 一键成片
+  quickMode: 'text',
+  quickSelected: new Set(),
+  // 素材库页签
+  alAssets: [],
+  alCategory: '__all',
+  alRendered: false,
 };
 
 // mirrors domain/state_machine/machine.py
@@ -104,6 +111,7 @@ $$('.tab-btn').forEach((btn) => {
     if (btn.dataset.tab === 'tab-generate') renderRuns();
     if (btn.dataset.tab === 'tab-review') renderReview();
     if (btn.dataset.tab === 'tab-director') renderDirector();
+    if (btn.dataset.tab === 'tab-assets') renderAssetLibrary();
   });
 });
 
@@ -183,6 +191,7 @@ async function loadProject(id) {
     renderRuns();
     renderMonitor();
     await refreshAssets();
+    if (state.alRendered) renderAssetLibrary(); // 素材库页签渲染过则同步刷新
     connectSSE();
   } catch (err) {
     toast('加载项目失败:' + err.message, 'err');
@@ -313,6 +322,7 @@ async function refreshAssets() {
     state.assets = res.assets || res || [];
     renderAssets();
     renderScenes(); // 素材下拉需要最新列表
+    renderQuickAssetPicker(); // 「素材+文案」模式的多选区同步刷新
   } catch (err) {
     toast('获取素材列表失败:' + err.message, 'err');
   }
@@ -345,6 +355,239 @@ function renderAssets() {
       '<div class="asset-id">' + esc(id) + (a.asset_version != null ? ' · v' + esc(a.asset_version) : '') + '</div></div></div>';
   }).join('');
 }
+
+/* ---------- 一键成片 ---------- */
+$$('.quick-mode-pill').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    state.quickMode = btn.dataset.mode;
+    $$('.quick-mode-pill').forEach((b) => b.classList.toggle('active', b === btn));
+    renderQuickAssetPicker();
+  });
+});
+
+// 「素材+文案」模式下的素材多选区(图片/视频缩略卡片,点击切换选中)
+function renderQuickAssetPicker() {
+  const box = $('#quick-asset-picker');
+  if (state.quickMode !== 'assets') { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  if (!state.assets.length) {
+    box.innerHTML = '<p class="empty-hint">当前项目暂无素材,可先在下方上传,或切到「文生视频」模式</p>';
+    return;
+  }
+  box.innerHTML = '<div class="quick-picker-hint">选择要加入的素材(可多选,已选 ' + state.quickSelected.size + ')</div>' +
+    '<div class="quick-picker-grid">' + state.assets.map((a) => {
+      const id = a.asset_id || a.id;
+      const name = a.filename || a.name || id;
+      const media = isVideoAsset(a)
+        ? '<video src="' + esc(assetFileUrl(a)) + '" preload="metadata" muted></video>'
+        : '<img src="' + esc(assetFileUrl(a)) + '" loading="lazy" alt="' + esc(name) + '">';
+      return '<div class="quick-pick-card' + (state.quickSelected.has(id) ? ' selected' : '') + '" data-asset-id="' + esc(id) + '">' +
+        media + '<div class="quick-pick-name">' + esc(name) + '</div></div>';
+    }).join('') + '</div>';
+  box.querySelectorAll('.quick-pick-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const id = card.dataset.assetId;
+      if (state.quickSelected.has(id)) state.quickSelected.delete(id);
+      else state.quickSelected.add(id);
+      card.classList.toggle('selected');
+      const hint = box.querySelector('.quick-picker-hint');
+      if (hint) hint.textContent = '选择要加入的素材(可多选,已选 ' + state.quickSelected.size + ')';
+    });
+  });
+}
+
+$('#quick-create-btn').addEventListener('click', async () => {
+  const brief = $('#quick-brief').value.trim();
+  if (!brief) { toast('请先描述你想要的短剧', 'err'); return; }
+  const body = {
+    title: brief.slice(0, 15),
+    brief,
+    duration_target_s: Number($('#quick-duration').value) || 60,
+    mode: state.quickMode,
+  };
+  const style = $('#quick-style').value.trim();
+  if (style) body.style = style;
+  if (state.quickMode === 'assets') body.asset_ids = Array.from(state.quickSelected);
+  const btn = $('#quick-create-btn');
+  btn.disabled = true;
+  btn.textContent = '创建中…';
+  try {
+    const res = await api('/projects/quick', { method: 'POST', json: body });
+    const pid = res.project_id || res.id;
+    if (!pid) throw new Error('响应中未找到 project_id');
+    toast('一键成片项目已创建:' + pid, 'ok');
+    state.quickSelected.clear();
+    $('#quick-brief').value = '';
+    await loadProject(pid);
+  } catch (err) {
+    toast('一键成片失败:' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '一键成片';
+  }
+});
+
+/* ---------- 素材库页签 ---------- */
+const AL_CATEGORY_MAP = {
+  character: '角色参考', location: '场景参考', prop: '道具', style: '风格参考',
+  footage: '视频素材', audio: '音频', export: '成片', other: '其他',
+};
+const AL_CATEGORIES = ['character', 'location', 'prop', 'style', 'footage', 'audio', 'export', 'other'];
+
+function alCategoryLabel(cat) {
+  if (!cat) return '未分类';
+  return AL_CATEGORY_MAP[cat] || cat;
+}
+
+function isAudioAsset(a) {
+  const mime = (a.mime || a.content_type || '').toLowerCase();
+  const name = (a.filename || a.name || a.storage_key || '').toLowerCase();
+  return a.media_type === 'audio' || mime.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac)$/.test(name);
+}
+
+// 项目筛选下拉 → 实际 project_id('' 表示全部项目)
+function alProjectParam() {
+  const v = $('#al-project-filter').value;
+  if (v === '__current') return state.currentProjectId || '';
+  return v;
+}
+
+async function renderAssetLibrary() {
+  state.alRendered = true;
+  renderAlCatNav();
+  const grid = $('#al-grid');
+  grid.innerHTML = '<p class="empty-hint">加载中…</p>';
+  const params = [];
+  const pid = alProjectParam();
+  if (pid) params.push('project_id=' + encodeURIComponent(pid));
+  if (state.alCategory !== '__all') {
+    // 未分类用空字符串 category 表示
+    params.push('category=' + encodeURIComponent(state.alCategory === '__none' ? '' : state.alCategory));
+  }
+  const mt = $('#al-type-filter').value;
+  if (mt) params.push('media_type=' + encodeURIComponent(mt));
+  try {
+    const res = await api('/assets' + (params.length ? '?' + params.join('&') : ''));
+    state.alAssets = res.assets || res || [];
+    renderAlGrid();
+  } catch (err) {
+    grid.innerHTML = '<p class="empty-hint">加载素材失败:' + esc(err.message) + '</p>';
+  }
+}
+
+function renderAlCatNav() {
+  const nav = $('#al-cat-nav');
+  const items = [['__all', '全部'], ['__none', '未分类']]
+    .concat(AL_CATEGORIES.map((c) => [c, AL_CATEGORY_MAP[c]]));
+  nav.innerHTML = items.map(([v, label]) =>
+    '<button class="al-cat-pill' + (state.alCategory === v ? ' active' : '') + '" data-cat="' + esc(v) + '">' + esc(label) + '</button>'
+  ).join('');
+  nav.querySelectorAll('.al-cat-pill').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.alCategory = btn.dataset.cat;
+      renderAssetLibrary();
+    });
+  });
+}
+
+function renderAlGrid() {
+  const grid = $('#al-grid');
+  const list = state.alAssets;
+  if (!list.length) { grid.innerHTML = '<p class="empty-hint">没有符合条件的素材</p>'; return; }
+  grid.innerHTML = list.map((a) => {
+    const id = a.asset_id || a.id;
+    const name = (a.storage_key || '').split('/').pop() || a.filename || a.name || id;
+    const url = assetFileUrl(a);
+    let media;
+    if (isAudioAsset(a)) media = '<div class="al-audio-thumb">♪</div>';
+    else if (a.media_type === 'video' || isVideoAsset(a)) media = '<video src="' + esc(url) + '" preload="metadata" muted></video>';
+    else media = '<img src="' + esc(url) + '" loading="lazy" alt="' + esc(name) + '">';
+    const mt = a.media_type || (isVideoAsset(a) ? 'video' : isAudioAsset(a) ? 'audio' : 'image');
+    return '<div class="asset-card al-card" data-asset-id="' + esc(id) + '">' + media +
+      '<div class="asset-info"><div class="asset-name" title="' + esc(name) + '">' + esc(name) + '</div>' +
+      '<div class="asset-id">' + esc(a.project_id || '-') + ' · ' + esc(mt) + '</div>' +
+      '<div class="al-cat-row"><span class="al-cat-pill-sm">' + esc(alCategoryLabel(a.category)) + '</span></div>' +
+      '</div></div>';
+  }).join('');
+  grid.querySelectorAll('.al-card').forEach((card) => {
+    card.addEventListener('click', () => showAlOverlay(card.dataset.assetId));
+  });
+}
+
+$('#al-project-filter').addEventListener('change', renderAssetLibrary);
+$('#al-type-filter').addEventListener('change', renderAssetLibrary);
+
+$('#al-overlay').addEventListener('click', (e) => {
+  if (e.target.id === 'al-overlay') hideAlOverlay();
+});
+
+function hideAlOverlay() {
+  const ov = $('#al-overlay');
+  ov.classList.add('hidden');
+  ov.innerHTML = '';
+}
+
+// 素材卡片操作层:预览 + 设置分类 + 查看大图/播放
+function showAlOverlay(assetId) {
+  const a = state.alAssets.find((x) => (x.asset_id || x.id) === assetId);
+  if (!a) return;
+  const id = a.asset_id || a.id;
+  const name = (a.storage_key || '').split('/').pop() || a.filename || a.name || id;
+  const url = assetFileUrl(a);
+  let preview;
+  if (isAudioAsset(a)) preview = '<audio src="' + esc(url) + '" controls class="al-audio-player"></audio>';
+  else if (a.media_type === 'video' || isVideoAsset(a)) preview = '<video src="' + esc(url) + '" controls preload="metadata"></video>';
+  else preview = '<img src="' + esc(url) + '" alt="' + esc(name) + '">';
+  const ov = $('#al-overlay');
+  ov.innerHTML = '<div class="al-overlay-inner">' +
+    '<div class="al-overlay-head"><span class="al-overlay-name" title="' + esc(name) + '">' + esc(name) + '</span>' +
+    '<button id="al-overlay-close" class="btn btn-small">关闭 ✕</button></div>' +
+    '<div class="al-overlay-preview">' + preview + '</div>' +
+    '<div class="al-overlay-meta">ID:' + esc(id) + (a.project_id ? ' · 项目:' + esc(a.project_id) : '') + '</div>' +
+    '<div class="al-overlay-actions">' +
+      '<select id="al-cat-select">' +
+        '<option value="">未分类</option>' +
+        AL_CATEGORIES.map((c) => '<option value="' + c + '"' + (a.category === c ? ' selected' : '') + '>' + esc(AL_CATEGORY_MAP[c]) + '</option>').join('') +
+      '</select>' +
+      '<button id="al-cat-save" class="btn btn-small btn-accent">设置分类</button>' +
+      '<a class="btn btn-small" href="' + esc(url) + '" target="_blank" rel="noopener">查看大图/播放</a>' +
+    '</div></div>';
+  ov.classList.remove('hidden');
+  $('#al-overlay-close').addEventListener('click', hideAlOverlay);
+  $('#al-cat-save').addEventListener('click', async () => {
+    const cat = $('#al-cat-select').value;
+    try {
+      await api('/assets/' + encodeURIComponent(id) + '/category', { method: 'POST', json: { category: cat } });
+      toast('分类已更新:' + alCategoryLabel(cat), 'ok');
+      hideAlOverlay();
+      renderAssetLibrary();
+    } catch (err) {
+      toast('设置分类失败:' + err.message, 'err');
+    }
+  });
+}
+
+$('#al-classify-btn').addEventListener('click', async () => {
+  const pid = alProjectParam();
+  if (!pid) {
+    toast('请先把项目筛选切到具体项目(或加载项目后选「当前项目」)', 'err');
+    return;
+  }
+  const btn = $('#al-classify-btn');
+  btn.disabled = true;
+  btn.textContent = '分类中…';
+  try {
+    const res = await api('/projects/' + encodeURIComponent(pid) + '/assets/classify', { method: 'POST', json: {} });
+    const n = res.classified ? Object.keys(res.classified).length : 0;
+    toast('自动分类完成:' + n + ' 个素材', 'ok');
+    renderAssetLibrary();
+  } catch (err) {
+    toast('自动分类失败:' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '自动分类';
+  }
+});
 
 /* ---------- 分镜镜头 ---------- */
 $('#refresh-shots-btn').addEventListener('click', () => {

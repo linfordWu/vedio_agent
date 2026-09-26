@@ -27,6 +27,13 @@ AssetSource = Literal["imported", "generated", "derived"]
 MediaType = Literal["image", "video", "audio", "text", "other"]
 AssetStatus = Literal["UPLOADING", "VALIDATING", "PROCESSING", "READY", "FAILED"]
 
+# 素材分类：character 角色参考 / location 场景参考 / prop 道具 / style 风格参考 /
+# footage 实拍视频素材 / audio 音频 / export 成片 / other；空串 = 未分类
+AssetCategory = Literal["character", "location", "prop", "style",
+                        "footage", "audio", "export", "other"]
+ASSET_CATEGORIES: tuple[str, ...] = (
+    "character", "location", "prop", "style", "footage", "audio", "export", "other")
+
 
 class Asset(BaseModel):
     asset_id: str = Field(default_factory=lambda: new_id("asset"))
@@ -35,6 +42,7 @@ class Asset(BaseModel):
     media_type: MediaType
     sha256: str = ""
     version: int = 1
+    category: str = ""              # AssetCategory；空 = 未分类
     metadata: dict[str, Any] = Field(default_factory=dict)
     storage_key: str = ""
     preview_key: str = ""
