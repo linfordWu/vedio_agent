@@ -7,6 +7,9 @@ const state = {
   // 片库
   projects: [],
   dbQuery: '',
+  dbFilter: 'all',
+  dbSort: 'recent',
+  dbView: 'grid',
   // 工作室
   currentProjectId: null,
   bundle: null,          // GET /projects/{id} → {project, scenes[], shots[], runs[]}
@@ -207,6 +210,20 @@ $('#db-search').addEventListener('input', (e) => {
   state.dbQuery = e.target.value;
   renderProjectCards();
 });
+$('#db-sort').addEventListener('change', (e) => {
+  state.dbSort = e.target.value;
+  renderProjectCards();
+});
+$$('.db-filter').forEach((btn) => btn.addEventListener('click', () => {
+  state.dbFilter = btn.dataset.filter;
+  $$('.db-filter').forEach((item) => item.classList.toggle('active', item === btn));
+  renderProjectCards();
+}));
+$$('.db-view-btn').forEach((btn) => btn.addEventListener('click', () => {
+  state.dbView = btn.dataset.view;
+  $$('.db-view-btn').forEach((item) => item.classList.toggle('active', item === btn));
+  renderProjectCards();
+}));
 
 async function renderDashboard() {
   const grid = $('#db-grid');
@@ -215,7 +232,8 @@ async function renderDashboard() {
     const res = await api('/projects');
     state.projects = res.projects || res || [];
   } catch (err) {
-    grid.innerHTML = '<div class="panel db-empty">读取片库失败:' + esc(err.message) + '</div>';
+    grid.innerHTML = '<div class="panel db-empty">暂时无法读取片库，请确认本地服务已启动后刷新页面。</div>';
+    renderHomeStudio([]);
     return;
   }
   renderProjectCards();
@@ -232,11 +250,28 @@ const SEG_DEFS = [
 
 function num(v) { const n = Number(v); return isNaN(n) ? 0 : n; }
 
+function projectStatus(p) {
+  const pg = p.progress || {};
+  if (SEG_DEFS[5].lit(pg)) return { key: 'complete', label: '已完成' };
+  if (SEG_DEFS.some((s) => s.lit(pg))) return { key: 'active', label: '创作中' };
+  return { key: 'draft', label: '草稿' };
+}
+
 function renderProjectCards() {
   const grid = $('#db-grid');
   const q = state.dbQuery.trim().toLowerCase();
-  const list = state.projects.filter((p) =>
-    !q || ((p.title || '') + ' ' + (p.genre || '')).toLowerCase().includes(q));
+  let list = state.projects.filter((p) => {
+    const matchesQuery = !q || ((p.title || '') + ' ' + (p.genre || '')).toLowerCase().includes(q);
+    const status = projectStatus(p).key;
+    const matchesFilter = state.dbFilter === 'all' || status === state.dbFilter;
+    return matchesQuery && matchesFilter;
+  });
+  list = list.slice().sort((a, b) => {
+    if (state.dbSort === 'title') return String(a.title || '').localeCompare(String(b.title || ''), 'zh-CN');
+    return String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || ''));
+  });
+  grid.classList.toggle('is-list', state.dbView === 'list');
+  renderHomeStudio(list.length ? list : state.projects);
   if (!state.projects.length) {
     grid.innerHTML = '<div class="panel db-empty">片场还是空的 — 点右上角「建立新片场」开始第一部短剧。</div>';
     return;
@@ -252,6 +287,7 @@ function renderProjectCards() {
     const updatedDate = updated ? new Date(updated) : null;
     const updatedTxt = updatedDate && !isNaN(updatedDate.getTime()) && updatedDate.getFullYear() >= 2000
       ? updatedDate.toLocaleDateString('zh-CN') : '';
+    const status = projectStatus(p);
     const ratio = p.aspect_ratio || p.ratio || '';
     const segs = SEG_DEFS.map((s, i) =>
       '<div><div class="proj-seg-bar' + (s.lit(pg) ? ' lit-' + i : '') + '"></div>' +
@@ -259,6 +295,7 @@ function renderProjectCards() {
     const stats = '剧本 ' + num(pg.scenes) + ' · 镜头 ' + num(pg.accepted) + '/' + num(pg.shots) +
       ' · 角色 ' + num(pg.characters) + ' · 定妆 ' + num(pg.portraits) + ' · 成片 ' + num(pg.exports);
     return '<article class="panel proj-card" data-id="' + esc(id) + '">' +
+      '<div class="proj-cover"><span class="proj-status ' + status.key + '">' + status.label + '</span></div>' +
       '<div class="proj-card-main">' +
         '<div class="proj-card-updated">' + (updatedTxt ? 'UPDATED ' + esc(updatedTxt) : '') + '</div>' +
         '<h3 class="proj-card-title">' + esc(p.title || '(无标题)') + '</h3>' +
@@ -276,6 +313,32 @@ function renderProjectCards() {
   grid.querySelectorAll('.db-del-btn').forEach((btn) => {
     btn.addEventListener('click', () => deleteProject(btn.dataset.id, btn.dataset.title));
   });
+}
+
+function renderHomeStudio(projects) {
+  const el = $('#home-studio');
+  if (!el) return;
+  const project = projects && projects[0];
+  if (!project) {
+    el.innerHTML = '<div class="label">PRODUCTION STUDIO</div><h2>从一个想法，<br>走到一部成片。</h2>' +
+      '<p class="home-studio-empty">创建第一个项目后，六步制片流程会在这里持续更新。</p>' +
+      '<a class="btn btn-projector btn-small" href="#/new">创建项目</a>';
+    return;
+  }
+  const id = project.project_id || project.id;
+  const pg = project.progress || {};
+  const active = projectStatus(project);
+  const stepItems = SEG_DEFS.map((step, i) =>
+    '<span class="home-step' + (step.lit(pg) ? ' done' : '') + '"><b>' + String(i + 1) + '</b>' + esc(step.label) + '</span>').join('');
+  el.innerHTML = '<div class="home-studio-head"><div><div class="label">PRODUCTION STUDIO</div><h2>制片工作台</h2></div>' +
+    '<span class="proj-status ' + active.key + '">' + active.label + '</span></div>' +
+    '<div class="home-studio-project">' + esc(project.title || '未命名项目') + '</div>' +
+    '<div class="home-studio-meta">' + esc([project.genre, project.style, project.aspect_ratio || project.ratio].filter(Boolean).join(' · ') || '本地短剧项目') + '</div>' +
+    '<div class="home-stepper">' + stepItems + '</div>' +
+    '<div class="home-stills"><span></span><span></span><span></span></div>' +
+    '<button class="btn btn-projector btn-small home-studio-open" data-id="' + esc(id) + '">进入工作台 <b>→</b></button>';
+  const open = el.querySelector('.home-studio-open');
+  if (open) open.addEventListener('click', () => go('#/studio/' + encodeURIComponent(open.dataset.id)));
 }
 
 async function deleteProject(id, title) {

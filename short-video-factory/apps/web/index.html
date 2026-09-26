@@ -4,54 +4,68 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>镜界 · 短剧工坊</title>
-<link rel="stylesheet" href="./style.css?v=13">
+<link rel="stylesheet" href="./style.css?v=14">
 </head>
 <body>
 
 <!-- ============ 视图一:片库 Dashboard #/ ============ -->
-<section id="view-dashboard" class="view">
-  <header class="app-topbar">
-    <a class="brand" href="#/" aria-label="返回片库">
-      <span class="brand-mark">J</span>
-      <span><b>镜界</b><small>本地短剧工作台</small></span>
+<section id="view-dashboard" class="view dashboard-shell">
+  <aside class="dashboard-sidebar">
+    <a class="dashboard-brand" href="#/" aria-label="镜界首页">
+      <span>JINGJIE</span><small>镜界 · 本地片场</small>
     </a>
-    <div class="topbar-actions">
-      <span class="local-status"><i></i> 本地运行</span>
-      <button id="db-new-btn" class="btn btn-projector">新建项目 <span>↗</span></button>
-    </div>
-  </header>
-  <header class="hero">
-    <div class="hero-left">
-      <div class="hero-eyebrow">从想法到成片 · 你的本地制片台</div>
-      <h1 class="hero-title">让故事，<br>自然地成为短剧。</h1>
-      <p class="hero-sub">写下一个想法，镜界会协助完成剧本、角色、场景、分镜与剪辑。每一步都清楚可控，始终在你的电脑里完成。</p>
-    </div>
-    <div class="hero-right">
-      <div class="hero-right-inner">
-        <div class="hero-pipeline">开始一部新作品</div>
-        <p class="hero-note">用一句故事、一个灵感，或你已有的素材开始创作。</p>
-        <ol class="hero-steps">
-          <li><span>01</span>写下故事</li>
-          <li><span>02</span>生成画面</li>
-          <li><span>03</span>导出成片</li>
-        </ol>
-        <a href="#/new" class="hero-link">开始创作 <span>→</span></a>
-      </div>
-    </div>
-  </header>
+    <nav class="dashboard-nav" aria-label="首页导航">
+      <a class="active" href="#/"><b>⌂</b> 首页</a>
+      <a href="#projects"><b>▣</b> 我的项目</a>
+      <a href="#/new"><b>＋</b> 创建项目</a>
+    </nav>
+    <div class="sidebar-quote">用 AI，拍出更好的故事。<small>A SMALL STUDIO<br>FOR BIGGER STORIES</small></div>
+  </aside>
 
-  <div class="db-section">
-    <div class="db-section-head">
-      <div>
-        <div class="label">PRODUCTION ARCHIVE</div>
-        <h2 class="section-title">本地项目</h2>
+  <main class="dashboard-main">
+    <header class="app-topbar">
+      <span class="dashboard-kicker">LOCAL CREATIVE DESK</span>
+      <div class="topbar-actions"><span class="local-status"><i></i> 本地运行</span><span class="creator-chip">镜界创作台</span></div>
+    </header>
+    <header class="hero">
+      <div class="hero-left">
+        <div class="hero-eyebrow">镜界 · 本地片场</div>
+        <h1 class="hero-title">让故事，<br>自然地成为短剧。</h1>
+        <p class="hero-sub">从一句想法开始，完成剧本、角色、场景、分镜与剪辑。每一步都清楚可控，始终在你的电脑里完成。</p>
+        <button id="db-new-btn" class="btn btn-projector btn-lg hero-create">开始创作 <span>→</span></button>
+        <div class="hero-steps"><span>剧本</span><i></i><span>分镜</span><i></i><span>成片</span></div>
       </div>
-      <input type="text" id="db-search" class="field db-search" placeholder="搜索片名或题材…">
+    </header>
+
+    <div class="dashboard-lower">
+      <section id="projects" class="db-section">
+        <div class="db-section-head">
+          <div>
+            <div class="label">MY PROJECTS</div>
+            <h2 class="section-title">我的项目</h2>
+          </div>
+          <div class="db-actions">
+            <input type="text" id="db-search" class="field db-search" placeholder="搜索片名或题材…">
+            <select id="db-sort" class="db-sort" aria-label="项目排序"><option value="recent">最近更新</option><option value="title">按片名排序</option></select>
+            <div class="db-view-toggle" aria-label="项目视图">
+              <button class="db-view-btn active" data-view="grid" title="网格视图">▦</button>
+              <button class="db-view-btn" data-view="list" title="列表视图">☷</button>
+            </div>
+          </div>
+        </div>
+        <div class="db-filter-row" role="tablist" aria-label="项目筛选">
+          <button class="db-filter active" data-filter="all">全部</button>
+          <button class="db-filter" data-filter="active">创作中</button>
+          <button class="db-filter" data-filter="complete">已完成</button>
+        </div>
+        <div id="db-grid" class="db-grid">
+          <div class="panel db-empty">正在读取本地片库…</div>
+        </div>
+      </section>
+
+      <aside id="home-studio" class="home-studio"><div class="empty-hint">正在整理制片进度…</div></aside>
     </div>
-    <div id="db-grid" class="db-grid">
-      <div class="panel db-empty">正在读取本地片库…</div>
-    </div>
-  </div>
+  </main>
 </section>
 
 <!-- ============ 视图二:建立片场 #/new ============ -->
