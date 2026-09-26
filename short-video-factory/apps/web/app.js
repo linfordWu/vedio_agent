@@ -115,24 +115,6 @@ function categoryLabel(cat) {
   return CATEGORY_MAP[cat] || cat;
 }
 
-/* ---------- 主题切换(初始主题由 index.html 内联脚本先行设置) ---------- */
-(function bindThemeToggle() {
-  const btn = document.getElementById('theme-toggle');
-  if (!btn) return;
-  function syncIcon() {
-    const dark = document.documentElement.dataset.theme === 'dark';
-    btn.textContent = dark ? '☀' : '🌙';
-    btn.title = dark ? '切换到日间模式' : '切换到夜间模式';
-  }
-  btn.addEventListener('click', () => {
-    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = next;
-    try { localStorage.setItem('svf-theme', next); } catch (e) { /* ignore */ }
-    syncIcon();
-  });
-  syncIcon();
-})();
-
 /* ---------- API ---------- */
 async function api(path, opts) {
   opts = opts || {};
@@ -267,7 +249,9 @@ function renderProjectCards() {
     const id = p.project_id || p.id;
     const pg = p.progress || {};
     const updated = p.updated_at || p.created_at;
-    const updatedTxt = updated ? new Date(updated).toLocaleDateString('zh-CN') : '';
+    const updatedDate = updated ? new Date(updated) : null;
+    const updatedTxt = updatedDate && !isNaN(updatedDate.getTime()) && updatedDate.getFullYear() >= 2000
+      ? updatedDate.toLocaleDateString('zh-CN') : '';
     const ratio = p.aspect_ratio || p.ratio || '';
     const segs = SEG_DEFS.map((s, i) =>
       '<div><div class="proj-seg-bar' + (s.lit(pg) ? ' lit-' + i : '') + '"></div>' +
@@ -648,14 +632,14 @@ function renderScriptStep(el) {
       '<div class="empty-hint" style="padding:0">每 3 秒自动刷新;若长时间无结果,可点上方「重新规划」</div></div>';
   } else {
     html += '<div class="scene-list">' + scenes.map((sc, i) => {
-      const sid = sc.scene_id || sc.id;
+      const sid = sc.scene_id || sc.id || ('scene_' + (i + 1));
       const count = shots.filter((sh) => {
         const ssid = sh.scene_id || shotSpec(sh).scene_id;
         return ssid === sid;
       }).length;
       return '<div class="scene-row">' +
         '<span class="scene-idx">' + String(i + 1).padStart(2, '0') + '</span>' +
-        '<span class="scene-title">' + esc(sc.title || sc.name || ('场景 ' + sid)) + '</span>' +
+        '<span class="scene-title">' + esc(sc.title || sc.name || ('场景 ' + String(i + 1).padStart(2, '0'))) + '</span>' +
         '<span class="scene-summary">' + esc(sc.summary || sc.description || '') + '</span>' +
         '<span class="scene-count">' + count + ' 镜</span>' +
       '</div>';

@@ -1,47 +1,41 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>镜界 · 短剧工坊</title>
-<script>
-// 主题引导:默认使用亮色片场;保留用户主动切换的偏好
-(function () {
-  var t = null;
-  try { t = localStorage.getItem('svf-theme'); } catch (e) { /* ignore */ }
-  if (t !== 'light' && t !== 'dark') {
-    t = 'light';
-  }
-  document.documentElement.dataset.theme = t;
-})();
-</script>
-<link rel="stylesheet" href="./style.css?v=12">
+<link rel="stylesheet" href="./style.css?v=13">
 </head>
 <body>
 
-<button id="theme-toggle" class="theme-toggle" title="切换夜间模式" aria-label="切换夜间模式">🌙</button>
-
 <!-- ============ 视图一:片库 Dashboard #/ ============ -->
 <section id="view-dashboard" class="view">
+  <header class="app-topbar">
+    <a class="brand" href="#/" aria-label="返回片库">
+      <span class="brand-mark">J</span>
+      <span><b>镜界</b><small>本地短剧工作台</small></span>
+    </a>
+    <div class="topbar-actions">
+      <span class="local-status"><i></i> 本地运行</span>
+      <button id="db-new-btn" class="btn btn-projector">新建项目 <span>↗</span></button>
+    </div>
+  </header>
   <header class="hero">
     <div class="hero-left">
-      <div class="hero-eyebrow"><span class="hero-clap">✦</span> 镜界短剧工坊 · LOCAL PRODUCTION DESK</div>
-      <h1 class="hero-title">把一个想法,<br>变成一部好看的短剧。</h1>
-      <p class="hero-sub">从剧本构思，到角色、场景、道具与分镜视频，再经本机剪辑导出成片——六步工作流，把创意落到每一帧。</p>
+      <div class="hero-eyebrow">从想法到成片 · 你的本地制片台</div>
+      <h1 class="hero-title">让故事，<br>自然地成为短剧。</h1>
+      <p class="hero-sub">写下一个想法，镜界会协助完成剧本、角色、场景、分镜与剪辑。每一步都清楚可控，始终在你的电脑里完成。</p>
     </div>
     <div class="hero-right">
-      <div class="hero-perforation"></div>
       <div class="hero-right-inner">
-        <div class="timecode hero-pipeline">PIPELINE / 06 STAGES</div>
+        <div class="hero-pipeline">开始一部新作品</div>
+        <p class="hero-note">用一句故事、一个灵感，或你已有的素材开始创作。</p>
         <ol class="hero-steps">
-          <li><span class="timecode">01</span>剧本</li>
-          <li><span class="timecode">02</span>角色</li>
-          <li><span class="timecode">03</span>场景</li>
-          <li><span class="timecode">04</span>道具</li>
-          <li><span class="timecode">05</span>分镜</li>
-          <li><span class="timecode">06</span>剪辑</li>
+          <li><span>01</span>写下故事</li>
+          <li><span>02</span>生成画面</li>
+          <li><span>03</span>导出成片</li>
         </ol>
-        <button id="db-new-btn" class="btn btn-projector btn-lg">+ 建立新片场</button>
+        <a href="#/new" class="hero-link">开始创作 <span>→</span></a>
       </div>
     </div>
   </header>
@@ -62,11 +56,19 @@
 
 <!-- ============ 视图二:建立片场 #/new ============ -->
 <section id="view-new" class="view hidden">
+  <header class="new-page-heading">
+    <a href="#/" class="hero-back">← 返回片库</a>
+    <div>
+      <div class="label">NEW PROJECT</div>
+      <h1>新建一个项目</h1>
+      <p>先定义故事与画面语言，接下来镜界会帮你组织完整的制片流程。</p>
+    </div>
+  </header>
   <header class="hero hero-slim">
     <div class="hero-left">
-      <a href="#/" class="hero-back">← 返回片库</a>
-      <h1 class="hero-title hero-title-sm">建立一座新片场</h1>
-      <p class="hero-sub">先确定故事方向与统一画面语言。建立后立即触发 AI 规划,从剧本开始推进六步流程。</p>
+      <div class="hero-eyebrow">创作提示</div>
+      <h2 class="hero-title hero-title-sm">从一个清晰的情绪或冲突开始。</h2>
+      <p class="hero-sub">不用写完整剧本。人物、关系、反转或一个难忘场景，都足够成为第一幕。</p>
     </div>
   </header>
 
