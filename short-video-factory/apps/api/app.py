@@ -139,7 +139,9 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
         store.append_event(ev("agent.started", "screenwriter", "planning scenes"))
         sc = text_model.chat_json(
             "你是短剧编剧 agent。把创意简报拆成有序场景，只输出 JSON。"
-            "同一角色在所有场景中名称与外观描述必须逐字一致。",
+            "同一角色在所有场景中名称与外观描述必须逐字一致。"
+            f"全片目标时长 {project.duration_target_s} 秒是硬约束："
+            "场景数量据此从严控制（每场约 5-8 秒，总时长不得超过目标）。",
             {"title": project.title, "style": project.style,
              "brief": project.brief,
              "duration_target_s": project.duration_target_s},
@@ -175,6 +177,12 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
             log.warning("cast extraction failed for %s", pid, exc_info=True)
         cast_by_name = {c.name: c for c in cast}
 
+        # 时长预算：全片镜头数 ≈ 目标时长/5s，每场秒数均分，约束逐场景下发
+        shot_budget = max(1, project.duration_target_s // 5)
+        n_scenes = max(1, len(scenes))
+        scene_seconds = max(4, round(project.duration_target_s / n_scenes))
+        scene_max_shots = max(1, round(scene_seconds / 5))
+
         for i, s in enumerate(scenes):
             scene = Scene(scene_id=new_id("scene"), project_id=pid, order=i,
                           title=str(s.get("title", "")),
@@ -189,7 +197,10 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                 "每个镜头的 beats 分三桶：already_happened=已演完不许重播的情节、"
                 "this_clip_only=本镜头独占的节拍、reserved_for_later=后续镜头预留"
                 "不许提前泄露的节拍；felt_intent=角色内心意图（不进画面描述）。"
-                "sequence_relation：场景内第一镜=sequence_first，后续镜头=next_shot。",
+                "sequence_relation：场景内第一镜=sequence_first，后续镜头=next_shot。"
+                f"时长硬约束：本场景约 {scene_seconds} 秒，最多 {scene_max_shots} 个镜头，"
+                f"所有镜头 duration_s 之和不得超过 {scene_seconds + 2} 秒"
+                f"（全片目标 {project.duration_target_s} 秒、约 {shot_budget} 个镜头）。",
                 {"project_style": project.style,
                  "scene": {"title": scene.title, "summary": scene.summary},
                  "cast": [{"name": c.name, "kind": c.kind,
