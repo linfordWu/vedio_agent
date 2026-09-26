@@ -1,67 +1,56 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Qwen Image text-to-image adapter (placeholder).
+"""Qwen-Image 2.1 text-to-image adapter.
 
-The workflow template is not frozen yet, so this raises until
-workflows/qwen_image.api.json exists; then it submits it through ComfyUI the
-same way the H3 renderer does.
+The weights are a diffusers bundle that ComfyUI cannot load directly, so a
+small persistent HTTP service (qwen_image_server.py, started inside the
+comfyui container) hosts the pipeline; this adapter just calls it.
 """
 from __future__ import annotations
 
-import copy
+import base64
 import json
-import random
-from pathlib import Path
+import urllib.request
 from typing import Optional
 
 from ...config import settings
-from ..comfyui.adapter import (
-    download_output, find_output_file, poll_history, submit_prompt,
-)
 
 
 class QwenImageModel:
-    """ImageModel protocol implementation."""
+    """ImageModel protocol implementation (HTTP service backend)."""
 
     def __init__(self, asset_store, base: Optional[str] = None,
-                 workflow_path: Optional[str | Path] = None,
-                 timeout_s: Optional[float] = None,
-                 project_id: str = "factory"):
+                 timeout_s: float = 1800.0, project_id: str = "factory"):
         self.asset_store = asset_store
-        self.base = (base or settings.COMFY_BASE).rstrip("/")
-        self.workflow_path = Path(workflow_path or settings.QWEN_IMAGE_WORKFLOW)
-        self.timeout_s = float(timeout_s or settings.RENDER_TIMEOUT_S)
+        self.base = (base or settings.QWEN_IMAGE_URL).rstrip("/")
+        self.timeout_s = timeout_s
         self.project_id = project_id
 
-    def _patch(self, workflow: dict, prompt: str, width: int, height: int) -> dict:
-        positive_done = False
-        for node in workflow.values():
-            inputs = node.get("inputs") or {}
-            ctype = node.get("class_type", "")
-            # First text-encode node is treated as the positive prompt.
-            if ctype == "CLIPTextEncode" and "text" in inputs and not positive_done:
-                inputs["text"] = prompt
-                positive_done = True
-            elif ctype in ("EmptyLatentImage", "EmptySD3LatentImage"):
-                inputs["width"] = width
-                inputs["height"] = height
-            if "seed" in inputs:
-                inputs["seed"] = random.randint(0, 2**31 - 1)
-            if ctype == "SaveImage":
-                inputs["filename_prefix"] = "svf/qwen_image"
-        return workflow
+    def available(self) -> bool:
+        try:
+            with urllib.request.urlopen(self.base + "/", timeout=5) as resp:
+                return json.loads(resp.read()).get("status") == "ok"
+        except Exception:
+            return False
 
     def generate(self, prompt: str, out_key: str, width: int = 1080,
-                 height: int = 1920) -> str:
-        if not self.workflow_path.exists():
-            raise RuntimeError("qwen_image workflow not ready")
-        workflow = self._patch(
-            copy.deepcopy(json.loads(self.workflow_path.read_text(encoding="utf-8"))),
-            prompt, width, height)
-        prompt_id = submit_prompt(self.base, workflow)
-        entry = poll_history(self.base, prompt_id, self.timeout_s)
-        item = find_output_file(entry, ("images",))
-        data = download_output(self.base, item)
+                 height: int = 1920, seed: Optional[int] = None,
+                 steps: int = 30) -> str:
+        body = {"prompt": prompt, "width": width, "height": height,
+                "steps": steps}
+        if seed is not None:
+            body["seed"] = seed
+        req = urllib.request.Request(
+            self.base + "/generate",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+            data = json.loads(resp.read())
+        if "error" in data:
+            raise RuntimeError(f"qwen-image: {data['error'][:300]}")
+        png = base64.b64decode(data["image_b64"])
         project_id = out_key.split("/", 1)[0] if "/" in out_key else self.project_id
         asset = self.asset_store.save_bytes(
-            data, project_id, "image", item["filename"], source="generated")
+            png, project_id, "image", out_key.rsplit("/", 1)[-1] + ".png"
+            if not out_key.endswith(".png") else out_key.rsplit("/", 1)[-1],
+            source="generated")
         return asset.storage_key
