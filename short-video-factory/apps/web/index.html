@@ -3,19 +3,19 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>短剧工坊 · 本地片场</title>
+<title>镜界 · 短剧工坊</title>
 <script>
-// 主题引导:先读 localStorage,缺省跟随系统;避免首屏闪烁
+// 主题引导:默认使用亮色片场;保留用户主动切换的偏好
 (function () {
   var t = null;
   try { t = localStorage.getItem('svf-theme'); } catch (e) { /* ignore */ }
   if (t !== 'light' && t !== 'dark') {
-    t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    t = 'light';
   }
   document.documentElement.dataset.theme = t;
 })();
 </script>
-<link rel="stylesheet" href="./style.css?v=11">
+<link rel="stylesheet" href="./style.css?v=12">
 </head>
 <body>
 
@@ -25,9 +25,9 @@
 <section id="view-dashboard" class="view">
   <header class="hero">
     <div class="hero-left">
-      <div class="hero-eyebrow"><span class="hero-clap">▣</span> 短剧工坊 · LOCAL PRODUCTION DESK</div>
-      <h1 class="hero-title">把一个想法,<br>变成一部完整短剧。</h1>
-      <p class="hero-sub">从剧本构思,到角色、场景、道具与分镜视频,再经本机剪辑导出成片——覆盖完整的六步制片流程。</p>
+      <div class="hero-eyebrow"><span class="hero-clap">✦</span> 镜界短剧工坊 · LOCAL PRODUCTION DESK</div>
+      <h1 class="hero-title">把一个想法,<br>变成一部好看的短剧。</h1>
+      <p class="hero-sub">从剧本构思，到角色、场景、道具与分镜视频，再经本机剪辑导出成片——六步工作流，把创意落到每一帧。</p>
     </div>
     <div class="hero-right">
       <div class="hero-perforation"></div>
