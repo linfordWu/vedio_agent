@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>短视频工厂 · 工作台</title>
-<link rel="stylesheet" href="./style.css?v=3">
+<link rel="stylesheet" href="./style.css?v=4">
 </head>
 <body>
 <header class="topbar">
@@ -23,7 +23,8 @@
   <button class="tab-btn active" data-tab="tab-project">项目与素材</button>
   <button class="tab-btn" data-tab="tab-shots">分镜镜头</button>
   <button class="tab-btn" data-tab="tab-generate">视频生成</button>
-  <button class="tab-btn" data-tab="tab-monitor">任务监控与审核</button>
+  <button class="tab-btn" data-tab="tab-monitor">任务监控</button>
+  <button class="tab-btn" data-tab="tab-review">审核</button>
 </nav>
 
 <main class="main">
@@ -116,7 +117,7 @@
     </div>
   </section>
 
-  <!-- ============ 页签四:任务监控与审核 ============ -->
+  <!-- ============ 页签四:任务监控 ============ -->
   <section id="tab-monitor" class="tab-pane">
     <div class="pane-toolbar">
       <button id="refresh-monitor-btn" class="btn">刷新</button>
@@ -136,10 +137,20 @@
     </table>
   </section>
 
+  <!-- ============ 页签五:审核 ============ -->
+  <section id="tab-review" class="tab-pane">
+    <div class="pane-toolbar">
+      <button id="refresh-review-btn" class="btn">刷新</button>
+      <button id="accept-all-btn" class="btn btn-accent">一键接受全部待审</button>
+      <span id="review-hint" class="toolbar-hint"></span>
+    </div>
+    <div id="review-list" class="review-list"></div>
+  </section>
+
 </main>
 
 <div id="toast-container" class="toast-container"></div>
 
-<script src="./app.js?v=4"></script>
+<script src="./app.js?v=5"></script>
 </body>
 </html>

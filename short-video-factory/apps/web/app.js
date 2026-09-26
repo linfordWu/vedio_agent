@@ -102,6 +102,7 @@ $$('.tab-btn').forEach((btn) => {
     $$('.tab-pane').forEach((p) => p.classList.toggle('active', p.id === btn.dataset.tab));
     if (btn.dataset.tab === 'tab-monitor') renderMonitor();
     if (btn.dataset.tab === 'tab-generate') renderRuns();
+    if (btn.dataset.tab === 'tab-review') renderReview();
   });
 });
 
@@ -669,7 +670,8 @@ function renderScore(run) {
 }
 
 async function submitReview(runId, decision, box) {
-  const note = box.querySelector('.review-note').value.trim();
+  const noteEl = box ? box.querySelector('.review-note') : null;
+  const note = noteEl ? noteEl.value.trim() : '';
   const body = { decision };
   if (note) body.note = note;
   try {
@@ -681,12 +683,102 @@ async function submitReview(runId, decision, box) {
       renderRuns();
       renderScenes();
       renderMonitor();
+      renderReview();
       renderProjectSummary();
     }
   } catch (err) {
     toast('审核提交失败:' + err.message, 'err');
   }
 }
+
+/* ---------- 审核页 ---------- */
+function pendingReviewRuns() {
+  return getRuns().filter((r) => runState(r) === 'HUMAN_REVIEW');
+}
+
+function renderReview() {
+  const list = $('#review-list');
+  if (!list) return;
+  const runs = pendingReviewRuns();
+  $('#review-hint').textContent = runs.length ? ('待审核 ' + runs.length + ' 条') : '没有待审核的任务';
+  $('#accept-all-btn').disabled = !runs.length;
+  if (!state.currentProjectId) {
+    list.innerHTML = '<div class="empty-hint">请先选择项目</div>';
+    return;
+  }
+  if (!runs.length) {
+    list.innerHTML = '<div class="empty-hint">暂无待审核任务</div>';
+    return;
+  }
+  list.innerHTML = runs.map((run) => {
+    const id = run.run_id || run.id;
+    const candidates = run.candidate_asset_ids || run.candidates || [];
+    const media = candidates.map((cid) => {
+      const aid = typeof cid === 'object' ? (cid.asset_id || cid.id) : cid;
+      const asset = state.assets.find((a) => (a.asset_id || a.id) === aid);
+      const url = '/assets/' + encodeURIComponent(aid) + '/file';
+      return (asset && !isVideoAsset(asset))
+        ? '<img src="' + esc(url) + '" alt="candidate">'
+        : '<video src="' + esc(url) + '" controls preload="metadata"></video>';
+    }).join('');
+    return '<div class="review-card" data-run-id="' + esc(id) + '">' +
+      '<div class="review-card-head"><span class="run-state-pill HUMAN_REVIEW">HUMAN_REVIEW</span>' +
+      '<span class="rid">' + esc(id) + '</span><span>镜头 ' + esc(run.shot_id || '-') + '</span></div>' +
+      (media ? '<div class="candidate-videos">' + media + '</div>' : '<div class="empty-hint">无候选素材</div>') +
+      renderScore(run) +
+      '<div class="review-row">' +
+        '<button class="btn btn-accent review-btn" data-decision="accept" data-run-id="' + esc(id) + '">接受</button>' +
+        '<button class="btn btn-danger review-btn" data-decision="reject" data-run-id="' + esc(id) + '">拒绝</button>' +
+        '<input type="text" class="review-note" placeholder="备注(可选,随审核一并提交)">' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  list.querySelectorAll('.review-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const card = btn.closest('.review-card');
+      submitReview(btn.dataset.runId, btn.dataset.decision, card);
+    });
+  });
+}
+
+$('#refresh-review-btn').addEventListener('click', async () => {
+  if (!state.currentProjectId) return;
+  const data = await api('/projects/' + encodeURIComponent(state.currentProjectId));
+  state.project = data;
+  renderReview();
+  toast('已刷新', 'ok');
+});
+
+$('#accept-all-btn').addEventListener('click', async () => {
+  const runs = pendingReviewRuns();
+  if (!runs.length) return;
+  if (!confirm('一键接受全部 ' + runs.length + ' 条待审核任务?')) return;
+  const btn = $('#accept-all-btn');
+  btn.disabled = true;
+  let okCount = 0, failCount = 0;
+  for (const run of runs) {
+    const id = run.run_id || run.id;
+    try {
+      await api('/runs/' + encodeURIComponent(id) + '/review', { method: 'POST', json: { decision: 'accept' } });
+      okCount++;
+    } catch (err) {
+      failCount++;
+    }
+    btn.textContent = '接受中… ' + okCount + '/' + runs.length;
+  }
+  btn.textContent = '一键接受全部待审';
+  btn.disabled = false;
+  toast('一键接受完成:成功 ' + okCount + (failCount ? ',失败 ' + failCount : ''), failCount ? 'err' : 'ok');
+  if (state.currentProjectId) {
+    const data = await api('/projects/' + encodeURIComponent(state.currentProjectId));
+    state.project = data;
+    renderRuns();
+    renderScenes();
+    renderMonitor();
+    renderReview();
+    renderProjectSummary();
+  }
+});
 
 /* ---------- SSE 事件流 ---------- */
 function setSSEStatus(mode, text) {

@@ -286,6 +286,14 @@ body {
 .hard-check.fail { border-color: var(--danger); color: var(--danger); }
 .review-row { display: flex; gap: 8px; align-items: center; }
 .review-row input { flex: 1; background: var(--bg-input); border: 1px solid var(--border); border-radius: 5px; color: var(--text); padding: 6px 10px; font-size: 12px; }
+.review-list { display: flex; flex-direction: column; gap: 14px; }
+.review-card {
+  background: var(--bg-panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 14px;
+}
+.review-card-head { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 12px; color: var(--text-dim); }
+.review-card-head .rid { font-family: var(--mono); }
+.run-state-pill.HUMAN_REVIEW { border-color: var(--warn); color: var(--warn); }
 .failure-box {
   background: rgba(229,83,75,0.08); border: 1px solid var(--danger);
   border-radius: 6px; padding: 8px 12px; font-size: 12px; color: var(--danger);
