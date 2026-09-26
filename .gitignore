@@ -26,3 +26,22 @@ validation/
 .env.*
 *.pem
 *.key
+
+# 设计类 skill 仅本地使用,不入库(保留 learning-video)
+skills/brandkit/
+skills/brutalist-skill/
+skills/frontend-design/
+skills/gpt-tasteskill/
+skills/image-to-code-skill/
+skills/imagegen-frontend-mobile/
+skills/imagegen-frontend-web/
+skills/minimalist-skill/
+skills/output-skill/
+skills/redesign-skill/
+skills/soft-skill/
+skills/stitch-skill/
+skills/taste-skill/
+skills/taste-skill-v1/
+skills/ui-ux-pro-max/
+skills/web-design-guidelines/
+skills/llms.txt
