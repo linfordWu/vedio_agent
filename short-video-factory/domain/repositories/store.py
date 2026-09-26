@@ -59,12 +59,14 @@ class Store:
 
     def _get(self, table: str, key: str):
         pk, model = TABLES[table]
-        row = self._db.execute(f"SELECT doc FROM {table} WHERE {pk}=?", (key,)).fetchone()
+        with self._lock:
+            row = self._db.execute(f"SELECT doc FROM {table} WHERE {pk}=?", (key,)).fetchone()
         return model.model_validate_json(row["doc"]) if row else None
 
     def _all(self, table: str, **where) -> list:
         pk, model = TABLES[table]
-        rows = self._db.execute(f"SELECT doc FROM {table}").fetchall()
+        with self._lock:
+            rows = self._db.execute(f"SELECT doc FROM {table}").fetchall()
         out = [model.model_validate_json(r["doc"]) for r in rows]
         for k, v in where.items():
             out = [o for o in out if getattr(o, k, None) == v]
@@ -111,13 +113,15 @@ class Store:
         return event
 
     def events_since(self, project_id: str, seq: int = 0, limit: int = 500) -> list[Event]:
-        rows = self._db.execute("SELECT doc FROM events").fetchall()
+        with self._lock:
+            rows = self._db.execute("SELECT doc FROM events").fetchall()
         out = [Event.model_validate_json(r["doc"]) for r in rows]
         return sorted([e for e in out if e.project_id == project_id and e.seq > seq],
                       key=lambda e: e.seq)[:limit]
 
     def unpublish_pending(self) -> list[Event]:
-        rows = self._db.execute("SELECT doc FROM outbox WHERE published=0").fetchall()
+        with self._lock:
+            rows = self._db.execute("SELECT doc FROM outbox WHERE published=0").fetchall()
         return [Event.model_validate_json(r["doc"]) for r in rows]
 
     def mark_published(self, event_id: str) -> None:

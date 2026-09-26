@@ -276,7 +276,7 @@ class WorkerEngine:
             except Exception:
                 log.warning("decision advice failed", exc_info=True)
 
-        fresh = self.store.get("runs", run.run_id)
+        fresh = self.store.get("runs", run.run_id) or run
         fresh.score = report.model_dump()
         fresh.updated_at = now_ts()
         self.store.put("runs", fresh)

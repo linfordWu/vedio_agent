@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import threading
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -80,3 +81,37 @@ class TestStore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStoreConcurrency(unittest.TestCase):
+    """Reads and writes race across threads; sqlite must stay consistent."""
+
+    def test_concurrent_read_write(self):
+        tmp = tempfile.mkdtemp()
+        store = Store(os.path.join(tmp, "race.db"))
+        run = Run(shot_id="s1", project_id="p1")
+        store.put("runs", run)
+        errors = []
+        stop = threading.Event()
+
+        def reader():
+            while not stop.is_set():
+                try:
+                    store.get("runs", run.run_id)
+                    store.all("runs")
+                    store.events_since("p1")
+                except Exception as e:  # noqa: BLE001
+                    errors.append(e)
+                    stop.set()
+
+        threads = [threading.Thread(target=reader) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for i in range(30):
+            store.append_event(Event(project_id="p1", type="t", summary=str(i)))
+            store.put("runs", run)
+        stop.set()
+        for t in threads:
+            t.join()
+        store.close()
+        self.assertEqual(errors, [])
