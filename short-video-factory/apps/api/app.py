@@ -691,8 +691,9 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         for scene in scenes:
             scene_shots = sorted([s for s in shots if s.scene_id == scene.scene_id],
                                  key=lambda s: s.order)
+            # 拍平:场景字段置顶 + shots 数组,前端直接读 sc.title/sc.scene_id
             out_scenes.append({
-                "scene": scene,
+                **scene.model_dump(),
                 "shots": [{"shot": s,
                            "runs": sorted(runs_by_shot.get(s.shot_id, []),
                                           key=lambda r: r.created_at)}
