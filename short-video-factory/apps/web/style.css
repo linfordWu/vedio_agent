@@ -1177,7 +1177,7 @@ body {
 .dashboard-main .hero-title { max-width: 450px; font-size: clamp(39px, 3.7vw, 56px); }
 .dashboard-main .hero-sub { max-width: 415px; font-size: 13px; line-height: 1.78; }
 .dashboard-main .hero-create { position: absolute; z-index: 2; left: 50%; bottom: 61px; margin: 0; transform: translateX(-50%); min-width: 156px; background: linear-gradient(135deg, #EF7869, #DC5F50); border-color: transparent; }
-.dashboard-main .hero-create:hover:not(:disabled) { background: linear-gradient(135deg, #E96C5D, #C94E43); }
+.dashboard-main .hero-create:hover:not(:disabled), .dashboard-main .hero-create:active:not(:disabled) { background: linear-gradient(135deg, #E96C5D, #C94E43); transform: translateX(-50%); }
 .dashboard-main .hero-steps { position: absolute; z-index: 2; left: 50%; bottom: 29px; margin: 0; transform: translateX(-50%); color: #735F5B; white-space: nowrap; }
 .dashboard-main .hero-steps i { background: #D8A7A0; }
 
