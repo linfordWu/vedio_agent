@@ -14,7 +14,7 @@ from ..domain.video_constraints import SYSTEM_VIDEO_CONSTRAINTS, constrained_acc
 SHOT_SECONDS = 5
 
 _SCHEMA_HINT = (
-    '{"shots": [{"scene": str, "duration_s": int, "aspect_ratio": str, '
+    '{"shots": [{"scene": str, "duration_s": int, '
     '"narrative_beat": str, "action": str, "dialogue": str, '
     '"motion_contract": {"start_state": str, "primary_motion": str, '
     '"secondary_motion": str, "end_state": str, "camera_motion": str}, '
@@ -61,7 +61,8 @@ class DirectorAgent:
             spec = ShotSpec(
                 shot_id=new_id("shot"),
                 duration_s=int(raw.get("duration_s") or SHOT_SECONDS),
-                aspect_ratio=str(raw.get("aspect_ratio") or aspect_ratio),
+                # 画幅以项目参数为准,LLM 逐镜给的值不信任(会混出竖屏镜头)
+                aspect_ratio=aspect_ratio,
                 action=str(raw.get("action") or ""),
                 dialogue=str(raw.get("dialogue") or ""),
                 narrative_beat=str(raw.get("narrative_beat") or ""),

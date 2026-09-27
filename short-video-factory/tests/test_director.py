@@ -171,7 +171,7 @@ def test_compose_prompt_with_characters(env):
     project = store.get("projects", pid)
     prompt = _compose_prompt(project, shot)
     assert "角色锁定（逐字保持）: 艾米: 20岁女孩,及肩黑发" in prompt
-    assert "台词: 你还好吗" in prompt
+    assert "<d>[Chinese] 你还好吗</d>" in prompt
     assert prompt.endswith("画面中不出现任何文字、字幕、水印、logo、标识")
 
 
@@ -230,7 +230,8 @@ def test_export_concat_subtitles(env, monkeypatch):
     body = r.json()
     assert body["mode"] == "concat_subtitles" and body["clips"] == 2
     assert body["asset"]["status"] == "READY"
-    cmd = calls[0]
+    # calls 里可能先有统一分辨率的 ffprobe/ffmpeg 探测,取真正的 concat 命令
+    cmd = next(c for c in calls if "concat" in c)
     assert "libx264" in cmd and "fast" in cmd and "18" in cmd
     assert any(a.startswith("subtitles=") for a in cmd)
 
@@ -248,7 +249,8 @@ def test_export_concat_fast_path(env, monkeypatch):
     r = client.post(f"/projects/{pid}/export")
     assert r.status_code == 200, r.text
     assert r.json()["mode"] == "concat"
-    cmd = calls[0]
+    # calls 里可能先有统一分辨率的 ffprobe/ffmpeg 探测,取真正的 concat 命令
+    cmd = next(c for c in calls if "concat" in c)
     assert cmd[cmd.index("-c") + 1] == "copy"
 
 

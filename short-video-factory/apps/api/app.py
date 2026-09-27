@@ -13,6 +13,7 @@ import json
 import logging
 import shutil
 import subprocess
+import tempfile
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -51,6 +52,7 @@ class ProjectCreate(BaseModel):
     style: str = ""
     brief: str = ""
     duration_target_s: int = 60
+    aspect_ratio: str = "16:9"
 
 
 class ProjectPatch(BaseModel):
@@ -140,6 +142,7 @@ class QuickCreate(BaseModel):
     brief: str                       # 创意文案（必填）
     style: str = ""
     duration_target_s: int = 60
+    aspect_ratio: str = "16:9"
     mode: Literal["text", "assets"] = "text"
     asset_ids: list[str] = []        # mode=assets 时选用的素材
 
@@ -265,7 +268,7 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                 '"reserved_for_later":[str]},'
                 '"object_states":[{"name":str,"count":str,'
                 '"start_state":str,"end_state":str}],'
-                '"aspect_ratio":str,"camera":{str:str},'
+                '"camera":{str:str},'
                 '"acceptance":{"required":[str],"forbidden":[str]}}]}',
                 max_tokens=4096)
             for j, d in enumerate(sh.get("shots") or []):
@@ -325,7 +328,8 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                     dialogue=str(d.get("dialogue", "")),
                     # 视频模型单镜时长有限,LLM 给的时长收敛到 [3,8] 秒
                     duration_s=max(3, min(8, int(d.get("duration_s") or 5))),
-                    aspect_ratio=str(d.get("aspect_ratio") or "9:16"),
+                    # 画幅以项目为准,LLM 逐镜给的值不信任(会混出竖屏镜头)
+                    aspect_ratio=project.aspect_ratio,
                     characters=spec_chars,
                     reference_assets=ref_assets,
                     sequence_relation=relation,
@@ -391,11 +395,21 @@ def _compose_prompt(project: Optional[Project], shot: Shot,
         if value:
             parts.append(f"{label}: {value}")
     if spec.dialogue:
-        parts.append(f"台词: {spec.dialogue}")
-        parts.append("音频: 中文普通话对白 + 贴合场景的环境音")
+        # H3 原生音频:参考学习视频验证过的结构化语法,
+        # <d>[Chinese] ...</d> 才能产出清晰中文语音,纯文字"台词:"不行
+        speaker = next((str(c.get("name") or "") for c in spec.characters
+                        if c.get("kind") != "location"
+                        and str(c.get("name") or "").strip()), "角色")
+        parts.append(f"本镜头中{speaker}用中文普通话清晰地说:")
+        parts.append(f"<d>[Chinese] {spec.dialogue}</d>")
+        parts.append("声音清晰、稳定、贴近麦克风。除此之外只有贴合场景的轻微环境音,"
+                     "没有其他人声。")
     else:
-        # 无台词时显式禁止人声,防止模型自行发挥生成外语腔人声
-        parts.append("音频: 仅环境音与动作音效,无对白、无人声、无外语呢喃")
+        # 正向声景描述 + 英文否定关键词(否定中文描述会被模型反向 priming)
+        parts.append("overall_soundscape: 仅贴合场景的安静环境音与动作音效。"
+                     "No voice, no speech, no dialogue, no narration, "
+                     "no murmuring, no whispering, no singing, in any language. "
+                     "non_diegetic_music: None.")
     if spec.camera:
         parts.append("镜头: " + ", ".join(f"{k}={v}" for k, v in spec.camera.items()))
     # 三桶节拍：已演不重演、未来不泄露
@@ -444,6 +458,63 @@ def _compose_prompt(project: Optional[Project], shot: Shot,
 
 
 # ------------------------------------------------------------------ export --
+# 导出统一分辨率目标(与 adapters.comfyui.adapter.ASPECT_SIZES 对齐)
+EXPORT_SIZES = {"16:9": (1920, 1080), "9:16": (1024, 1792), "1:1": (1024, 1024)}
+
+
+def _probe_video_size(ffprobe: Optional[str], path: str) -> Optional[tuple]:
+    if not ffprobe:
+        return None
+    try:
+        res = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=60)
+        w, h = res.stdout.strip().split(",")[:2]
+        return int(w), int(h)
+    except Exception:
+        return None
+
+
+def _unify_export_clips(ffmpeg: str, project: Project, clips: list,
+                        workdir: Path, path_for) -> list:
+    """分辨率不一致的片段重编码到统一尺寸(scale+pad 居中)。
+
+    concat -c copy 不转码,混入竖屏片段会让播放器在中段切换横竖屏。
+    目标尺寸取所有片段的众数分辨率(即项目实际渲染画布,如 H3 的
+    1920x1072),探测失败时回退到项目画幅的标准尺寸;只有偏离
+    众数的少数片段会被重编码,并在 clip["_path"] 记下新文件。
+    path_for: asset_store.path_for,把 storage_key 解析为本地路径。
+    """
+    ffprobe = shutil.which("ffprobe")
+    probed = [(clip, _probe_video_size(ffprobe, path_for(clip["storage_key"])))
+              for clip in clips]
+    known = [size for _, size in probed if size is not None]
+    if known:
+        target_w, target_h = max(set(known), key=known.count)
+    else:
+        target_w, target_h = EXPORT_SIZES.get(project.aspect_ratio,
+                                              EXPORT_SIZES["16:9"])
+    for i, (clip, size) in enumerate(probed):
+        if size is None or size == (target_w, target_h):
+            continue
+        src = path_for(clip["storage_key"])
+        out = workdir / f"unified_{i:02d}.mp4"
+        vf = (f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+              f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2")
+        res = subprocess.run(
+            [ffmpeg, "-y", "-v", "error", "-i", src, "-vf", vf,
+             "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+             "-c:a", "aac", str(out)],
+            capture_output=True, text=True, timeout=600)
+        if res.returncode == 0 and out.exists() and out.stat().st_size > 0:
+            clip["_path"] = str(out)
+        else:
+            log.warning("unify clip failed (%s), keep original: %s",
+                        clip.get("shot_id"), (res.stderr or "")[-300:])
+    return clips
+
+
 def _srt_timestamp(seconds: float) -> str:
     ms = max(0, int(round(seconds * 1000)))
     h, ms = divmod(ms, 3600_000)
@@ -591,7 +662,8 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
     @app.post("/projects", status_code=201)
     def create_project(body: ProjectCreate) -> Project:
         project = Project(title=body.title, style=body.style, brief=body.brief,
-                          duration_target_s=body.duration_target_s)
+                          duration_target_s=body.duration_target_s,
+                          aspect_ratio=body.aspect_ratio)
         store.put("projects", project)
         store.append_event(Event(project_id=project.project_id,
                                  type="project.created", actor="api",
@@ -652,7 +724,8 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                 assets.append(_get_or_404("assets", aid))
         project = Project(title=body.title or body.brief[:20], style=body.style,
                           brief=body.brief,
-                          duration_target_s=body.duration_target_s)
+                          duration_target_s=body.duration_target_s,
+                          aspect_ratio=body.aspect_ratio)
         store.put("projects", project)
         store.append_event(Event(project_id=project.project_id,
                                  type="project.created", actor="api",
@@ -988,6 +1061,7 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             order=max((item.order for item in scene_shots), default=-1) + 1,
             spec=ShotSpec(shot_id=shot_id, duration_s=body.duration_s,
                           action=action, dialogue=body.dialogue.strip(),
+                          aspect_ratio=project.aspect_ratio,
                           acceptance=constrained_acceptance()),
         )
         store.put("shots", shot)
@@ -1220,15 +1294,22 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
 
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg:
-            # 有台词且要求字幕：烧录 SRT（必须重编码）；否则走 concat -c copy 快路径
-            if body.subtitles and any(c["dialogue"].strip() for c in clips):
-                asset = _try_ffmpeg_concat_subtitles(ffmpeg, project, clips)
+            unify_dir = Path(tempfile.mkdtemp(prefix="svf-unify-"))
+            try:
+                # 画幅不一致的片段(如历史项目里的竖屏镜头)先统一到项目画幅
+                clips = _unify_export_clips(ffmpeg, project, clips, unify_dir,
+                                            asset_store.path_for)
+                # 有台词且要求字幕：烧录 SRT（必须重编码）；否则走 concat -c copy 快路径
+                if body.subtitles and any(c["dialogue"].strip() for c in clips):
+                    asset = _try_ffmpeg_concat_subtitles(ffmpeg, project, clips)
+                    if asset is not None:
+                        return {"asset": asset, "mode": "concat_subtitles",
+                                "clips": len(clips)}
+                asset = _try_ffmpeg_concat(ffmpeg, project, clips)
                 if asset is not None:
-                    return {"asset": asset, "mode": "concat_subtitles",
-                            "clips": len(clips)}
-            asset = _try_ffmpeg_concat(ffmpeg, project, clips)
-            if asset is not None:
-                return {"asset": asset, "mode": "concat", "clips": len(clips)}
+                    return {"asset": asset, "mode": "concat", "clips": len(clips)}
+            finally:
+                shutil.rmtree(unify_dir, ignore_errors=True)
         manifest = {"project_id": project_id, "title": project.title,
                     "generated_at": now_ts(), "clips": clips}
         asset = asset_store.save_bytes(
@@ -1249,7 +1330,8 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             workdir.mkdir(parents=True, exist_ok=True)
             list_file = workdir / "concat.txt"
             list_file.write_text("".join(
-                f"file '{asset_store.path_for(c['storage_key'])}'\n" for c in clips))
+                f"file '{c.get('_path') or asset_store.path_for(c['storage_key'])}'\n"
+                for c in clips))
             out = workdir / f"{export_id}.mp4"
             res = subprocess.run(
                 [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
@@ -1286,7 +1368,8 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             srt_file.write_text(build_srt(clips), encoding="utf-8")
             list_file = workdir / "concat.txt"
             list_file.write_text("".join(
-                f"file '{asset_store.path_for(c['storage_key'])}'\n" for c in clips))
+                f"file '{c.get('_path') or asset_store.path_for(c['storage_key'])}'\n"
+                for c in clips))
             out = workdir / f"{export_id}.mp4"
             vf = f"subtitles={_escape_filter_path(str(srt_file))}"
             res = subprocess.run(

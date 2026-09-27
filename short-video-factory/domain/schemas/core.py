@@ -153,6 +153,9 @@ class Project(BaseModel):
     style: str = ""
     brief: str = ""
     duration_target_s: int = 60
+    # 项目级画幅锁：所有镜头强制使用该画幅,不信任 LLM 逐镜给出的值,
+    # 否则同一项目会混出竖屏镜头,导出后播放器中段切换横竖屏。
+    aspect_ratio: str = "16:9"
     created_at: float = Field(default_factory=now_ts)
 
 
