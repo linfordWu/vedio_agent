@@ -124,10 +124,12 @@ class TestChatJson(unittest.TestCase):
 
     def test_chat_json_raises_after_failed_retry(self):
         replies = [_FakeResponse(_chat_payload("bad")),
-                   _FakeResponse(_chat_payload("still bad"))]
-        with mock.patch("urllib.request.urlopen", side_effect=replies):
+                   _FakeResponse(_chat_payload("still bad")),
+                   _FakeResponse(_chat_payload("bad again"))]
+        with mock.patch("urllib.request.urlopen", side_effect=replies) as u:
             with self.assertRaises(ValueError):
                 self.client.chat_json("do it", {}, '{}')
+        self.assertEqual(u.call_count, 3)
 
 
 # ------------------------------------------------------------ repair map ---

@@ -101,10 +101,19 @@ class TextModelClient:
             return extract_json(reply)
         except ValueError:
             pass
-        # One retry with a stricter instruction and the bad reply as context.
-        retry = _messages(instructions + "\n\n" +
-                          _RETRY_INSTRUCTION.format(schema_hint=schema_hint))
-        retry.append({"role": "assistant", "content": reply})
-        retry.append({"role": "user", "content": "Fix it: output the JSON only."})
-        reply = self.chat(retry, max_tokens=max_tokens, temperature=0.2)
+        # Up to two retries with a stricter instruction and the bad reply
+        # as context (Kimi occasionally emits malformed JSON twice in a row).
+        messages = _messages(instructions + "\n\n" +
+                             _RETRY_INSTRUCTION.format(schema_hint=schema_hint))
+        for attempt in range(2):
+            retry = list(messages)
+            retry.append({"role": "assistant", "content": reply})
+            retry.append({"role": "user", "content":
+                          "Fix it: output the JSON only."})
+            reply = self.chat(retry, max_tokens=max_tokens, temperature=0.2)
+            try:
+                return extract_json(reply)
+            except ValueError:
+                if attempt == 1:
+                    raise
         return extract_json(reply)

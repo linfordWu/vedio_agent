@@ -334,6 +334,7 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
     except Exception as exc:
         log.exception("planning failed for project %s", pid)
         store.append_event(ev("plan.failed", "screenwriter", str(exc)[:300]))
+        raise   # 让 quick 编排走 quick.failed,而不是空项目静默"成功"
 
 
 def _compose_prompt(project: Optional[Project], shot: Shot,
