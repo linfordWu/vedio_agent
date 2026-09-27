@@ -249,7 +249,8 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                 '"object_states":[{"name":str,"count":str,'
                 '"start_state":str,"end_state":str}],'
                 '"aspect_ratio":str,"camera":{str:str},'
-                '"acceptance":{"required":[str],"forbidden":[str]}}]}')
+                '"acceptance":{"required":[str],"forbidden":[str]}}]}',
+                max_tokens=4096)
             for j, d in enumerate(sh.get("shots") or []):
                 shot_id = new_id("shot")
                 try:

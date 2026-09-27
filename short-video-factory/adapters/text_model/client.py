@@ -40,8 +40,56 @@ def extract_json(text: str) -> dict:
         # 模型常在字符串里输出裸换行/制表符,strict=False 容忍控制字符
         try:
             return json.loads(raw, strict=False)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"invalid JSON in model reply: {e}") from e
+        except json.JSONDecodeError:
+            pass
+    # 输出被 max_tokens 截断时:回退到最后一个完整边界,补齐未闭合括号
+    salvaged = _salvage_truncated(raw)
+    if salvaged is not None:
+        return salvaged
+    raise ValueError("invalid JSON in model reply (unrecoverable)")
+
+
+def _salvage_truncated(raw: str) -> dict | None:
+    """Best-effort repair of a truncated JSON object.
+
+    Cut back to each structural boundary (`,`/`{`/`}`/`[`/`]`) from the end,
+    close any open string, then close open brackets; return the first
+    candidate that parses as a dict.
+    """
+    cuts = [i for i, ch in enumerate(raw) if ch in ",{}[]"]
+    for cut in reversed(cuts):
+        cand = raw[:cut]
+        if cand.count('"') % 2 == 1:
+            cand += '"'
+        opens: list[str] = []
+        in_str = False
+        esc = False
+        for ch in cand:
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch in "{[":
+                opens.append(ch)
+            elif ch in "}]":
+                if opens:
+                    opens.pop()
+        if not opens or opens[0] != "{":
+            continue
+        tail = "".join("}" if c == "{" else "]" for c in reversed(opens))
+        try:
+            out = json.loads(cand + tail, strict=False)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(out, dict):
+            return out
+    return None
 
 
 class TextModelClient:

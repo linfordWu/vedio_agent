@@ -132,6 +132,31 @@ class TestChatJson(unittest.TestCase):
         self.assertEqual(u.call_count, 3)
 
 
+class TestExtractJsonSalvage(unittest.TestCase):
+    def test_truncated_after_complete_element(self):
+        raw = '{"shots": [{"action": "a", "duration_s": 5}, {"action": "b", "dura'
+        out = extract_json(raw)
+        self.assertEqual(out, {"shots": [{"action": "a", "duration_s": 5}]})
+
+    def test_truncated_mid_second_element(self):
+        raw = '{"shots": [{"action": "a"}, {"act'
+        out = extract_json(raw)
+        self.assertEqual(out, {"shots": [{"action": "a"}]})
+
+    def test_truncated_inside_first_element_raises(self):
+        # 首个元素都不完整时没有可挽救的边界,应当抛出
+        with self.assertRaises(ValueError):
+            extract_json('{"shots": [{"action": "端盘落')
+
+    def test_unrecoverable_raises(self):
+        with self.assertRaises(ValueError):
+            extract_json('{"a": ')
+
+    def test_valid_json_unaffected(self):
+        self.assertEqual(extract_json('{"ok": 1}'), {"ok": 1})
+        self.assertEqual(extract_json('pre {"ok": 2} post'), {"ok": 2})
+
+
 # ------------------------------------------------------------ repair map ---
 
 class TestRepairMapping(unittest.TestCase):
