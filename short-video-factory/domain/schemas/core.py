@@ -94,7 +94,7 @@ class Acceptance(BaseModel):
 
 class ShotSpec(BaseModel):
     """Single shared target for generation and scoring (doc section 07)."""
-    schema_version: str = "2"
+    schema_version: str = "3"
     material_policy: Literal["prefer_imported", "generate_only"] = "prefer_imported"
     production_mode: Literal["generate", "reuse"] = "generate"
     shot_id: str
@@ -108,6 +108,9 @@ class ShotSpec(BaseModel):
     continuity: dict[str, str] = Field(default_factory=dict)
     reference_assets: list[str] = Field(default_factory=list)
     acceptance: Acceptance = Field(default_factory=Acceptance)
+    # 每镜都要有可验证的剧情职责和真实运动，避免静态参考图的缩放伪视频。
+    narrative_beat: str = ""
+    motion_contract: dict[str, str] = Field(default_factory=dict)
     # ---- 序列/节拍结构（seedance 密度与续拍思想的中文化重写）----
     sequence_relation: Literal["standalone", "sequence_first",
                                "seamless_continuation", "next_shot",
@@ -188,7 +191,7 @@ class ScoreReport(BaseModel):
     scores: dict[str, float] = Field(default_factory=dict)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     uncertain: bool = False
-    rubric_version: str = "shortdrama-v1"
+    rubric_version: str = "shortdrama-v2"
     # accept_with_deviation 时记录可接受偏差的说明
     deviation: str = ""
     # 评审器对画面观察的把握；low 的 accept 不许自动通过

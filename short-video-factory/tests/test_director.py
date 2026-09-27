@@ -170,7 +170,7 @@ def test_compose_prompt_with_characters(env):
     store.put("shots", shot)
     project = store.get("projects", pid)
     prompt = _compose_prompt(project, shot)
-    assert "角色: 艾米=20岁女孩,及肩黑发" in prompt
+    assert "角色锁定（逐字保持）: 艾米: 20岁女孩,及肩黑发" in prompt
     assert "台词: 你还好吗" in prompt
     assert prompt.endswith("画面中不出现任何文字、字幕、水印、logo、标识")
 

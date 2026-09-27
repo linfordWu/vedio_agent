@@ -161,6 +161,21 @@ class TestRepairMapping(unittest.TestCase):
         plan = self.agent.plan(score, self.run)
         self.assertEqual((plan.target, plan.action), ("prompt", "rewrite_action"))
 
+    def test_static_image_simulation_rewrites_motion_contract(self):
+        score = ScoreReport(run_id=self.run.run_id, verdict="repair",
+                            evidence=[{"tag": "static_image_simulation"}])
+        plan = self.agent.plan(score, self.run)
+        self.assertEqual((plan.target, plan.action, plan.invalidate_from),
+                         ("prompt", "rewrite_motion_contract", "PROMPT_READY"))
+
+    def test_story_linkage_and_continuity_have_targeted_repairs(self):
+        score = ScoreReport(run_id=self.run.run_id, verdict="repair",
+                            scores={"story_linkage": 0.3})
+        assert self.agent.plan(score, self.run).action == "rewrite_motion_contract"
+        score = ScoreReport(run_id=self.run.run_id, verdict="repair",
+                            scores={"continuity": 0.3})
+        assert self.agent.plan(score, self.run).action == "rebind_reference"
+
     def test_uncertain_goes_to_human_review(self):
         score = ScoreReport(run_id=self.run.run_id, verdict="uncertain",
                             uncertain=True)

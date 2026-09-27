@@ -133,7 +133,38 @@ def test_compose_prompt_reference_carries_state():
     spec = ShotSpec(shot_id="s", action="走近", reference_assets=["asset_1"])
     prompt = _compose_prompt(_project(), Shot(shot_id="s", scene_id="sc",
                                               project_id="p", spec=spec))
-    assert "参考图已包含角色外观与场景，请严格保持，文字仅描述动作与变化" in prompt
+    assert "参考图是角色、场景和关键道具的唯一视觉锚点，逐帧严格保持" in prompt
+
+
+def test_compose_prompt_requires_story_motion_not_static_image_zoom():
+    spec = ShotSpec(
+        shot_id="s", action="艾米停步后转向红灯",
+        narrative_beat="手机亮起让艾米决定继续等待",
+        motion_contract={
+            "start_state": "艾米面向街口，手机垂在右手",
+            "primary_motion": "手机亮起后她握紧手机并回头",
+            "secondary_motion": "红灯在雨幕中闪烁，远处车流掠过",
+            "end_state": "她面向红灯，手机停在胸前",
+        })
+    prompt = _compose_prompt(_project(), Shot(shot_id="s", scene_id="sc",
+                                              project_id="p", spec=spec))
+    assert "本镜剧情节拍: 手机亮起让艾米决定继续等待" in prompt
+    assert "环境/道具变化: 红灯在雨幕中闪烁，远处车流掠过" in prompt
+    assert "禁止生成把单张人物图、风景图或插画进行放大" in prompt
+    assert "人物、风景与道具" in prompt
+
+
+def test_compose_prompt_locks_roles_and_locations_verbatim():
+    spec = ShotSpec(
+        shot_id="s", action="艾米把伞递给陈默",
+        characters=[
+            {"name": "艾米", "kind": "character", "description": "黑色短发，米色风衣"},
+            {"name": "雨夜车站", "kind": "location", "description": "蓝色站牌，湿润地面"},
+        ])
+    prompt = _compose_prompt(_project(), Shot(shot_id="s", scene_id="sc",
+                                              project_id="p", spec=spec))
+    assert "角色锁定（逐字保持）: 艾米: 黑色短发，米色风衣" in prompt
+    assert "场景锁定（逐字保持）: 雨夜车站: 蓝色站牌，湿润地面" in prompt
 
 
 def test_compose_prompt_observed_end_state_continuation():
@@ -257,6 +288,16 @@ def test_judge_old_reply_without_new_fields(tmp_path, monkeypatch):
     assert report.verdict == "accept"
     assert report.observation_confidence == "high"
     assert report.observed_end_state == ""
+
+
+def test_judge_rejects_static_image_simulation(tmp_path, monkeypatch):
+    judge, video_key = _judge_with_reply(tmp_path, monkeypatch, {
+        "identity": 0.95, "action": 0.95, "scene": 0.95, "motion": 0.95,
+        "text_ok": 1.0, "verdict": "accept",
+        "issues": ["static_image_simulation"]})
+    report = judge.score_video(video_key, ShotSpec(shot_id="s", duration_s=5))
+    assert report.verdict == "repair"
+    assert {item["tag"] for item in report.evidence} == {"static_image_simulation"}
 
 
 # ------------------------------------------------------------------ engine ---

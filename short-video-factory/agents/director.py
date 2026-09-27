@@ -9,12 +9,16 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..domain.schemas.core import Acceptance, ShotSpec, new_id
+from ..domain.video_constraints import SYSTEM_VIDEO_CONSTRAINTS, constrained_acceptance
 
 SHOT_SECONDS = 5
 
 _SCHEMA_HINT = (
     '{"shots": [{"scene": str, "duration_s": int, "aspect_ratio": str, '
-    '"action": str, "dialogue": str, "camera": {"shot": str, "movement": str}, '
+    '"narrative_beat": str, "action": str, "dialogue": str, '
+    '"motion_contract": {"start_state": str, "primary_motion": str, '
+    '"secondary_motion": str, "end_state": str, "camera_motion": str}, '
+    '"camera": {"shot": str, "movement": str}, '
     '"acceptance": {"required": [str], "forbidden": [str]}}]}'
 )
 
@@ -32,9 +36,12 @@ class DirectorAgent:
         instructions = (
             "You are the director of a short-drama factory. Break the script "
             f"into at most {budget} shots (about {SHOT_SECONDS}s each). For every "
-            "shot give: which scene it belongs to, the visible action, the "
-            "spoken dialogue line (may be empty), camera framing/movement, and "
+            "shot give: which scene it belongs to, the narrative beat, the visible "
+            "action, the spoken dialogue line (may be empty), a motion contract "
+            "(start state, character/prop motion, environment/prop motion, end state), "
+            "camera framing/movement, and "
             "acceptance.required as concrete checkable points for a vision judge."
+            " " + SYSTEM_VIDEO_CONSTRAINTS
         )
         out = self.text_model.chat_json(
             instructions,
@@ -57,11 +64,14 @@ class DirectorAgent:
                 aspect_ratio=str(raw.get("aspect_ratio") or aspect_ratio),
                 action=str(raw.get("action") or ""),
                 dialogue=str(raw.get("dialogue") or ""),
+                narrative_beat=str(raw.get("narrative_beat") or ""),
+                motion_contract={str(k): str(v) for k, v
+                                 in (raw.get("motion_contract") or {}).items()},
                 camera={str(k): str(v) for k, v in camera_raw.items()},
-                acceptance=Acceptance(
+                acceptance=constrained_acceptance(Acceptance(
                     required=[str(r) for r in acceptance_raw.get("required") or []],
                     forbidden=[str(f) for f in acceptance_raw.get("forbidden") or []],
-                ),
+                )),
                 continuity={"scene": str(raw.get("scene") or "")},
             )
             specs.append(spec)

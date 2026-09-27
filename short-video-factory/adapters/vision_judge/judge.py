@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 from ...config import settings
 from ...domain.schemas.core import ScoreReport, ShotSpec
+from ...domain.video_constraints import SYSTEM_VIDEO_CONSTRAINTS
 from ..asset_store.local import FFMPEG, FFPROBE, _probe_ffprobe
 from ..text_model.client import TextModelClient, extract_json
 
@@ -36,6 +37,14 @@ Score each dimension from 0.0 to 1.0:
 - identity: characters match their reference / description
 - action: the required action actually happens
 - scene: setting/background matches the spec
+- motion: a story-driven subject or prop movement AND a separate environment,
+  prop, lighting or depth/parallax change are visible; camera movement alone
+  does not count
+- story_linkage: characters, landscape and props visibly respond to the same
+  narrative event instead of moving independently or remaining decorative
+- continuity: identity, clothes, location layout and key props stay consistent
+- artifact_free: no extra people, malformed anatomy/hands, object popping or
+  disappearing, slideshow/static-image simulation
 - text_ok: no garbled/extra on-screen text
 
 Also report:
@@ -49,6 +58,8 @@ Also report:
 
 Respond with ONE JSON object only:
 {{"identity": 0-1, "action": 0-1, "scene": 0-1, "text_ok": 0-1,
+  "motion": 0-1, "story_linkage": 0-1, "continuity": 0-1,
+  "artifact_free": 0-1,
   "verdict": "accept|accept_with_deviation|repair|reject",
   "deviation": "str",
   "observation_confidence": "high|medium|low",
@@ -122,7 +133,7 @@ class GemmaVisionJudge:
                                     n=len(frames),
                                     required="\n".join(f"- {r}" for r in spec.acceptance.required) or "- (none)",
                                     forbidden="\n".join(f"- {f}" for f in spec.acceptance.forbidden) or "- (none)",
-                                )}]
+                                ) + "\n" + SYSTEM_VIDEO_CONSTRAINTS}]
         for frame in frames:
             b64 = base64.b64encode(frame.read_bytes()).decode("ascii")
             content.append({"type": "image_url", "image_url":
@@ -139,8 +150,21 @@ class GemmaVisionJudge:
             reply = self.client.chat([{"role": "user", "content": content}],
                                      max_tokens=512, temperature=0.1)
             parsed = extract_json(reply)
+            # 基础字段是旧版评审器已稳定输出的格式。
             for key in ("identity", "action", "scene", "text_ok"):
                 scores[key] = max(0.0, min(1.0, float(parsed.get(key, 0.0))))
+            # 旧部署的评审模型可能尚未返回 motion；兼容期间用 action 分数
+            # 保守代替，并依靠 static_image_simulation 标签一票否决。
+            scores["motion"] = max(0.0, min(1.0, float(
+                parsed.get("motion", scores["action"]))))
+            # 新维度可由新版评审器直接给分；没有时用对应的旧维度作保守回退，
+            # 使升级不会把旧 JSON 回复一律降为 repair。
+            scores["story_linkage"] = max(0.0, min(1.0, float(
+                parsed.get("story_linkage", scores["action"]))))
+            scores["continuity"] = max(0.0, min(1.0, float(
+                parsed.get("continuity", min(scores["identity"], scores["scene"])))))
+            scores["artifact_free"] = max(0.0, min(1.0, float(
+                parsed.get("artifact_free", scores["text_ok"]))))
             issues = [str(i) for i in parsed.get("issues") or []]
             model_verdict = str(parsed.get("verdict") or "")
             deviation = str(parsed.get("deviation") or "")
@@ -152,7 +176,12 @@ class GemmaVisionJudge:
             parse_failed = True
 
         hard_passed = all(hard.values())
-        if not hard_passed:
+        hard_visual_failure = any(issue in (
+            "static_image_simulation", "camera_motion_only", "story_disconnected",
+            "continuity_break", "identity_drift", "extra_person", "anatomy_error",
+            "object_popping",
+        ) for issue in issues)
+        if hard_visual_failure:
             verdict = "repair"
         elif parse_failed:
             verdict = "uncertain"

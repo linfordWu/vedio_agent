@@ -29,6 +29,9 @@ from ...domain.schemas.core import (
     ASSET_CATEGORIES, Acceptance, Asset, AssetBinding, AssetCategory, Character,
     Event, Project, RepairPlan, Run, Scene, Shot, ShotSpec, new_id, now_ts,
 )
+from ...domain.video_constraints import (SYSTEM_VIDEO_CONSTRAINTS,
+                                          constrained_acceptance,
+                                          locked_visual_block)
 from ...domain.state_machine.machine import TERMINAL
 from ...ingestion.uploader import Uploader, UploadError
 from ...quality.density import density_score, emotion_hits
@@ -210,6 +213,10 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                 "每个镜头的 beats 分三桶：already_happened=已演完不许重播的情节、"
                 "this_clip_only=本镜头独占的节拍、reserved_for_later=后续镜头预留"
                 "不许提前泄露的节拍；felt_intent=角色内心意图（不进画面描述）。"
+                "每镜必须填写 narrative_beat（它推动的剧情）和 motion_contract（开始状态、"
+                "角色或关键道具的主运动、环境/道具/光影的独立次运动、结束状态）。"
+                "禁止把人物图或风景图的裁切、平移、缩放、推拉、Ken Burns 效果当作视频；"
+                "相机运动不能代替角色、道具和环境的剧情运动。"
                 "sequence_relation：场景内第一镜=sequence_first，后续镜头=next_shot。"
                 f"时长硬约束：本场景约 {scene_seconds} 秒，最多 {scene_max_shots} 个镜头，"
                 f"所有镜头 duration_s 之和不得超过 {scene_seconds + 2} 秒"
@@ -221,7 +228,9 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                 '{"shots":[{"action":str,"dialogue":str,"duration_s":int(每镜4-8秒),'
                 '"characters":[str],'
                 '"sequence_relation":"sequence_first|next_shot",'
-                '"felt_intent":str,'
+                '"felt_intent":str,"narrative_beat":str,'
+                '"motion_contract":{"start_state":str,"primary_motion":str,'
+                '"secondary_motion":str,"end_state":str,"camera_motion":str},'
                 '"beats":{"already_happened":[str],"this_clip_only":[str],'
                 '"reserved_for_later":[str]},'
                 '"aspect_ratio":str,"camera":{str:str},'
@@ -229,9 +238,10 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
             for j, d in enumerate(sh.get("shots") or []):
                 shot_id = new_id("shot")
                 try:
-                    acceptance = Acceptance(**(d.get("acceptance") or {}))
+                    acceptance = constrained_acceptance(
+                        Acceptance(**(d.get("acceptance") or {})))
                 except Exception:
-                    acceptance = Acceptance()
+                    acceptance = constrained_acceptance()
                 # 角色名 -> 登记表展开，参考图合入 reference_assets
                 spec_chars = []
                 ref_assets: list[str] = []
@@ -266,6 +276,9 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                     sequence_relation=relation,
                     beats=beats,
                     felt_intent=str(d.get("felt_intent", "")),
+                    narrative_beat=str(d.get("narrative_beat", "")),
+                    motion_contract={str(k): str(v) for k, v
+                                     in (d.get("motion_contract") or {}).items()},
                     camera={str(k): str(v)
                             for k, v in (d.get("camera") or {}).items()},
                     acceptance=acceptance)
@@ -280,25 +293,30 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
         store.append_event(ev("plan.failed", "screenwriter", str(exc)[:300]))
 
 
-_NO_TEXT_SUFFIX = "画面中不出现任何文字、字幕、水印、logo、标识"
-
-
 def _compose_prompt(project: Optional[Project], shot: Shot,
                     prev_shot: Optional[Shot] = None) -> str:
     spec = shot.spec
     parts = []
     if project and project.style:
         parts.append(f"风格: {project.style}")
-    if spec.characters:
-        descs = [f"{c.get('name', '')}={c.get('description', '')}"
-                 if c.get("description") else str(c.get("name", ""))
-                 for c in spec.characters]
-        parts.append("角色: " + "; ".join(descs))
+    visual_lock = locked_visual_block(spec)
+    if visual_lock:
+        parts.append(visual_lock)
     # 观测态续接：上一镜的实际末态优先于任何计划描述
     if prev_shot is not None and prev_shot.spec.observed_end_state:
         parts.append(f"开场接续上一镜实际末态: {prev_shot.spec.observed_end_state}")
     if spec.action:
         parts.append(spec.action)
+    if spec.narrative_beat:
+        parts.append(f"本镜剧情节拍: {spec.narrative_beat}")
+    motion = spec.motion_contract or {}
+    for field, label in (("start_state", "动作开始状态"),
+                         ("primary_motion", "主动作"),
+                         ("secondary_motion", "环境/道具变化"),
+                         ("end_state", "动作结束状态")):
+        value = str(motion.get(field) or "").strip()
+        if value:
+            parts.append(f"{label}: {value}")
     if spec.dialogue:
         parts.append(f"台词: {spec.dialogue}")
     if spec.camera:
@@ -317,10 +335,12 @@ def _compose_prompt(project: Optional[Project], shot: Shot,
                      "只有焦点角色执行主要动作")
     # Source-Carries-State：外观与场景由参考图承载，文字只写动作与变化
     if spec.reference_assets:
-        parts.append("参考图已包含角色外观与场景，请严格保持，文字仅描述动作与变化")
+        parts.append("参考图是角色、场景和关键道具的唯一视觉锚点，逐帧严格保持；"
+                     "文字只描述本镜头的动作、因果变化与镜头语言")
     prompt = " | ".join(parts) or f"shot {shot.shot_id}"
-    # 视频模型生成文字会乱码：固定追加禁文字约束（乱码治理）
-    return prompt + " | " + _NO_TEXT_SUFFIX
+    # 末尾保留明确的禁文字指令，兼容现有渲染工作流的 prompt 解析习惯。
+    return prompt + " | " + SYSTEM_VIDEO_CONSTRAINTS + \
+        " | 画面中不出现任何文字、字幕、水印、logo、标识"
 
 
 # ------------------------------------------------------------------ export --
@@ -820,7 +840,8 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             project_id=project_id,
             order=max((item.order for item in scene_shots), default=-1) + 1,
             spec=ShotSpec(shot_id=shot_id, duration_s=body.duration_s,
-                          action=action, dialogue=body.dialogue.strip()),
+                          action=action, dialogue=body.dialogue.strip(),
+                          acceptance=constrained_acceptance()),
         )
         store.put("shots", shot)
         store.append_event(Event(project_id=project_id, type="shot.created",
