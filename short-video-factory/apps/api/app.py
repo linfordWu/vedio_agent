@@ -198,7 +198,22 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                                   f"{len(cast)} characters/locations"))
         except Exception:
             log.warning("cast extraction failed for %s", pid, exc_info=True)
+        # 地点兜底:LLM 漏登记 location 时按场景合成,保证场景参考图与
+        # 空间锁定链路不断(名称=场景名,描述=场景摘要)
+        if scenes and not any(c.kind == "location" for c in cast):
+            for s in scenes:
+                title = str(s.get("title") or "").strip()
+                if not title:
+                    continue
+                ch = Character(project_id=pid, name=title[:20],
+                               kind="location",
+                               description=str(s.get("summary") or title))
+                store.put("characters", ch)
+                cast.append(ch)
+            store.append_event(ev("cast.location_fallback", "director",
+                                  "synthesized locations from scenes"))
         cast_by_name = {c.name: c for c in cast}
+        loc_by_scene = {c.name: c for c in cast if c.kind == "location"}
 
         # 时长预算：全片镜头数 ≈ 目标时长/5s，每场秒数均分，约束逐场景下发
         shot_budget = max(1, project.duration_target_s // 5)
@@ -272,6 +287,17 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                                        "description": ch.description})
                     if ch.asset_id and ch.asset_id not in ref_assets:
                         ref_assets.append(ch.asset_id)
+                # 场景地点注入:该镜未引用任何地点时,挂上本场景的地点,
+                # 让空间/光线锁定描述进入提示词(名称与场景标题一致)
+                if not any(c.get("kind") == "location" for c in spec_chars):
+                    loc = loc_by_scene.get(scene.title) or \
+                        loc_by_scene.get(scene.title[:20])
+                    if loc is not None:
+                        spec_chars.append({"character_id": loc.character_id,
+                                           "name": loc.name, "kind": "location",
+                                           "description": loc.description})
+                        if loc.asset_id and loc.asset_id not in ref_assets:
+                            ref_assets.append(loc.asset_id)
                 # 三桶节拍 + 序列关系（LLM 不给/给错时按镜头位置兜底）
                 beats_raw = d.get("beats") or {}
                 beats = {k: [str(x) for x in (beats_raw.get(k) or [])]

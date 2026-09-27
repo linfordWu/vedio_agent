@@ -26,6 +26,7 @@ from svf.apps.api.app import create_app  # noqa: E402
 from svf.domain.repositories.store import Store  # noqa: E402
 
 from tests.test_api import FakeAssetStore, FakeJudge, FakeTextModel, wait_for  # noqa: E402
+from tests.test_casting import FakeImageModel  # noqa: E402
 from tests.test_director import make_project  # noqa: E402
 
 
@@ -36,7 +37,8 @@ def env(tmp_path):
     asset_store = FakeAssetStore(tmp_path / "assets")
     app = create_app(store, asset_store, renderer=None, judge=FakeJudge(),
                      decision=None, text_model=FakeTextModel(),
-                     data_dir=str(tmp_path / "data"), start_worker=False)
+                     data_dir=str(tmp_path / "data"), start_worker=False,
+                     image_model=FakeImageModel(asset_store, store))
     client = TestClient(app)
     yield client, store, asset_store, app
     app.state.engine.shutdown()
