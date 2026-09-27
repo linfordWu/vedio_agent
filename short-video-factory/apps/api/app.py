@@ -286,6 +286,22 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                                         project_id=pid, order=j, spec=spec))
             store.append_event(ev("agent.completed", "director",
                                   f"scene {i} shots saved"))
+
+        # 规划后时长归一化：提示词约束是软性的，LLM 仍可能超发，
+        # 这里按比例确定性缩放到目标时长（单镜 3-8s 钳制）。
+        planned = store.all("shots", project_id=pid)
+        total_dur = sum(s.spec.duration_s for s in planned)
+        target = project.duration_target_s
+        if planned and total_dur > 0 and target > 0 \
+                and abs(total_dur - target) / target > 0.15:
+            scale = target / total_dur
+            for s in planned:
+                s.spec.duration_s = max(3, min(8, round(s.spec.duration_s * scale)))
+                store.put("shots", s)
+            new_total = sum(s.spec.duration_s for s in planned)
+            store.append_event(ev("plan.normalized", "director",
+                                  f"{total_dur}s -> {new_total}s "
+                                  f"(target {target}s)"))
         store.append_event(ev("plan.completed", "screenwriter",
                               f"{len(scenes)} scenes planned"))
     except Exception as exc:
