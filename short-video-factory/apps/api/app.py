@@ -21,7 +21,7 @@ from typing import Literal, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ...config import settings
 from ...domain.repositories.store import Store
@@ -48,6 +48,19 @@ class ProjectCreate(BaseModel):
     style: str = ""
     brief: str = ""
     duration_target_s: int = 60
+
+
+class ProjectPatch(BaseModel):
+    """可在工作台中安全修改的项目创作底稿。"""
+    brief: Optional[str] = None
+
+
+class ManualShotCreate(BaseModel):
+    """用户在分镜页手动补充的镜头。未指定场景时自动建立一个场景。"""
+    scene_id: Optional[str] = None
+    action: str = ""
+    dialogue: str = ""
+    duration_s: int = Field(default=5, ge=1, le=120)
 
 
 class UploadCreate(BaseModel):
@@ -380,9 +393,16 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         chars = store.all("characters")
         assets = store.all("assets")
         out = []
+        running_states = {"RENDERING", "GENERATED", "NORMALIZING", "SCORING",
+                          "REPAIRING", "CANCEL_REQUESTED"}
+        waiting_states = {"PLANNED", "ASSET_READY", "PROMPT_READY", "QUEUED",
+                          "RETRY_WAIT"}
+        task_summary = {"running_projects": 0, "waiting_projects": 0,
+                        "completed_projects": 0}
         for p in projects:
             pid = p.project_id
             p_shots = [s for s in shots if s.project_id == pid]
+            p_runs = [r for r in runs if r.project_id == pid]
             p_chars = [c for c in chars if c.project_id == pid]
             p_assets = [a for a in assets if a.project_id == pid]
             # 首页/项目库直接预览：优先用最新派生成片；没有成片时，回退到已验收镜头的候选视频。
@@ -404,7 +424,7 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             progress = {
                 "scenes": sum(1 for s in scenes if s.project_id == pid),
                 "shots": len(p_shots),
-                "runs": sum(1 for r in runs if r.project_id == pid),
+                "runs": len(p_runs),
                 "accepted": sum(1 for s in p_shots if s.accepted_run_id),
                 "characters": sum(1 for c in p_chars if c.kind == "character"),
                 "locations": sum(1 for c in p_chars if c.kind == "location"),
@@ -415,10 +435,25 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                                if a.project_id == pid and a.source == "derived"
                                and a.media_type == "video"),
             }
+            # 首页以项目为单位展示队列状态：一个项目命中执行态就优先算执行中；
+            # 没有活跃任务且所有镜头验收后才计为已完成。
+            states = {r.state for r in p_runs}
+            if states & running_states:
+                task_summary["running_projects"] += 1
+            elif states & waiting_states:
+                task_summary["waiting_projects"] += 1
+            elif p_shots and len(p_shots) == progress["accepted"]:
+                task_summary["completed_projects"] += 1
             out.append({**p.model_dump(), "progress": progress,
                         "preview_video_asset_id": preview.asset_id if preview else None,
                         "preview_video_kind": "export" if preview and preview.source == "derived" else "clip"})
-        return {"projects": out}
+        # 估时是队列预估而非渲染服务承诺：执行中的项目按约 1 分钟、等待中的
+        # 项目按约 90 秒折算，便于用户在首页判断是否需要等待。
+        eta_seconds = (task_summary["running_projects"] * 60
+                       + task_summary["waiting_projects"] * 90)
+        task_summary["eta_seconds"] = eta_seconds
+        task_summary["estimated_finish_at"] = now_ts() + eta_seconds if eta_seconds else None
+        return {"projects": out, "task_summary": task_summary}
 
     @app.post("/projects", status_code=201)
     def create_project(body: ProjectCreate) -> Project:
@@ -428,6 +463,16 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         store.append_event(Event(project_id=project.project_id,
                                  type="project.created", actor="api",
                                  summary=project.title))
+        return project
+
+    @app.patch("/projects/{project_id}")
+    def patch_project(project_id: str, body: ProjectPatch) -> Project:
+        project = _get_or_404("projects", project_id)
+        if body.brief is not None:
+            project.brief = body.brief.strip()
+        store.put("projects", project)
+        store.append_event(Event(project_id=project_id, type="project.updated",
+                                 actor="api", summary="brief updated"))
         return project
 
     @app.post("/projects/{project_id}/plan", status_code=202)
@@ -743,6 +788,43 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         store.put("shots", shot)
         store.append_event(Event(project_id=shot.project_id, type="shot.updated",
                                  actor="api", summary=shot.shot_id))
+        return shot
+
+    @app.post("/projects/{project_id}/shots", status_code=201)
+    def create_manual_shot(project_id: str, body: ManualShotCreate) -> Shot:
+        """创建可立即编辑和生成的手动分镜，解决 AI 规划为空时无法继续的问题。"""
+        project = _get_or_404("projects", project_id)
+        action = body.action.strip()
+        if not action:
+            raise HTTPException(422, "镜头画面描述不能为空")
+
+        scenes = sorted(store.all("scenes", project_id=project_id),
+                        key=lambda scene: scene.order)
+        scene = None
+        if body.scene_id:
+            scene = next((item for item in scenes if item.scene_id == body.scene_id), None)
+            if scene is None:
+                raise HTTPException(404, f"scenes/{body.scene_id} not found")
+        elif scenes:
+            scene = scenes[0]
+        else:
+            scene = Scene(scene_id=new_id("scene"), project_id=project_id,
+                          order=0, title="场景 01", summary="手动补充场景")
+            store.put("scenes", scene)
+
+        scene_shots = store.all("shots", project_id=project_id, scene_id=scene.scene_id)
+        shot_id = new_id("shot")
+        shot = Shot(
+            shot_id=shot_id,
+            scene_id=scene.scene_id,
+            project_id=project_id,
+            order=max((item.order for item in scene_shots), default=-1) + 1,
+            spec=ShotSpec(shot_id=shot_id, duration_s=body.duration_s,
+                          action=action, dialogue=body.dialogue.strip()),
+        )
+        store.put("shots", shot)
+        store.append_event(Event(project_id=project_id, type="shot.created",
+                                 actor="api", summary=f"manual: {shot_id}"))
         return shot
 
     @app.delete("/shots/{shot_id}/references/{asset_id}")

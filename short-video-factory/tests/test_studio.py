@@ -115,6 +115,30 @@ def test_patch_shot(env):
     assert client.patch("/shots/shot_nope", json={"action": "x"}).status_code == 404
 
 
+def test_edit_project_brief_and_create_manual_shot(env):
+    client, store, _, _ = env
+    pid = make_project(client)
+
+    r = client.patch(f"/projects/{pid}", json={"brief": "修改后的创作提示词"})
+    assert r.status_code == 200
+    assert r.json()["brief"] == "修改后的创作提示词"
+
+    # 未规划场景时，手动补镜会建立默认场景并可带台词。
+    r = client.post(f"/projects/{pid}/shots", json={
+        "action": "女孩推开厨房的窗，晨光照进来", "dialogue": "新的一天开始了。",
+        "duration_s": 6,
+    })
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert created["order"] == 0
+    assert created["spec"]["dialogue"] == "新的一天开始了。"
+    assert len(store.all("scenes", project_id=pid)) == 1
+
+    listing = client.get("/projects").json()
+    assert listing["task_summary"]["completed_projects"] == 0
+    assert listing["task_summary"]["eta_seconds"] == 0
+
+
 # ------------------------------------------------------------- references ----
 def test_remove_shot_reference(env):
     client, store, _, _ = env

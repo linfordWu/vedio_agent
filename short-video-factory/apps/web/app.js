@@ -6,6 +6,7 @@ const state = {
   route: { view: 'dashboard' },
   // 片库
   projects: [],
+  taskSummary: null,
   dbQuery: '',
   dbFilter: 'all',
   dbSort: 'recent',
@@ -262,6 +263,7 @@ async function renderDashboard() {
   try {
     const res = await api('/projects');
     state.projects = res.projects || res || [];
+    state.taskSummary = res.task_summary || null;
   } catch (err) {
     grid.innerHTML = '<div class="panel db-empty">暂时无法读取片库，请确认本地服务已启动后刷新页面。</div>';
     renderHomeStudio([]);
@@ -363,32 +365,19 @@ function renderProjectCards() {
 function renderHomeStudio(projects) {
   const el = $('#home-studio');
   if (!el) return;
-  const project = projects && projects[0];
-  if (!project) {
-    el.innerHTML = '<div class="label">PRODUCTION STUDIO</div><h2>从一个想法，<br>走到一部成片。</h2>' +
-      '<p class="home-studio-empty">创建第一个项目后，六步制片流程会在这里持续更新。</p>' +
-      '<a class="btn btn-projector btn-small" href="#/new">创建项目</a>';
-    return;
-  }
-  const id = project.project_id || project.id;
-  const pg = project.progress || {};
-  const active = projectStatus(project);
-  const previewAssetId = project.preview_video_asset_id;
-  const previewKind = project.preview_video_kind || 'clip';
-  const stepItems = SEG_DEFS.map((step, i) =>
-    '<span class="home-step' + (step.lit(pg) ? ' done' : '') + '"><b>' + String(i + 1) + '</b>' + esc(step.label) + '</span>').join('');
-  el.innerHTML = '<div class="home-studio-head"><div><div class="label">PRODUCTION STUDIO</div><h2>制片工作台</h2></div>' +
-    '<span class="proj-status ' + active.key + '">' + active.label + '</span></div>' +
-    '<div class="home-studio-project">' + esc(project.title || '未命名项目') + '</div>' +
-    '<div class="home-studio-meta">' + esc([project.genre, project.style, project.aspect_ratio || project.ratio].filter(Boolean).join(' · ') || '本地短剧项目') + '</div>' +
-    '<div class="home-stepper">' + stepItems + '</div>' +
-    '<div class="home-stills"><span></span><span></span><span></span></div>' +
-    (previewAssetId ? '<button class="btn btn-small home-video-preview" data-asset-id="' + esc(previewAssetId) + '" data-title="' + esc(project.title || '项目') + '" data-kind="' + esc(previewKind) + '">▶ 查看视频</button>' : '') +
-    '<button class="btn btn-projector btn-small home-studio-open" data-id="' + esc(id) + '">进入工作台 <b>→</b></button>';
-  const open = el.querySelector('.home-studio-open');
-  if (open) open.addEventListener('click', () => go('#/studio/' + encodeURIComponent(open.dataset.id)));
-  const preview = el.querySelector('.home-video-preview');
-  if (preview) preview.addEventListener('click', () => openProjectVideo(preview.dataset.assetId, preview.dataset.title, preview.dataset.kind));
+  const summary = state.taskSummary || { running_projects: 0, waiting_projects: 0, completed_projects: 0, eta_seconds: 0 };
+  const eta = Number(summary.eta_seconds || 0);
+  const etaText = eta ? '约 ' + Math.max(1, Math.ceil(eta / 60)) + ' 分钟后' : '暂无排队任务';
+  const hasProjects = projects && projects.length;
+  el.innerHTML = '<div class="home-studio-head"><div><div class="label">CURRENT TASKS</div><h2>当前工作状态</h2></div>' +
+    '<span class="home-task-live"><i></i>' + (eta ? '队列运行中' : '队列空闲') + '</span></div>' +
+    '<p class="home-task-intro">生成队列会在这里自动汇总，项目卡片仍可直接进入对应工作台。</p>' +
+    '<div class="home-task-grid">' +
+      '<div class="home-task-card running"><b>' + num(summary.running_projects) + '</b><span>正在执行</span></div>' +
+      '<div class="home-task-card waiting"><b>' + num(summary.waiting_projects) + '</b><span>等待执行</span></div>' +
+      '<div class="home-task-card complete"><b>' + num(summary.completed_projects) + '</b><span>已完成项目</span></div>' +
+    '</div>' +
+    '<div class="home-eta"><span>预计完成时间</span><strong>' + etaText + '</strong><small>' + (eta ? '按当前队列节奏估算' : (hasProjects ? '提交生成任务后将显示预估时间' : '创建项目后可在此查看任务状态')) + '</small></div>';
 }
 
 async function deleteProject(id, title) {
@@ -736,7 +725,9 @@ function renderScriptStep(el) {
       '<div class="brief-meta">' + esc([proj.genre, proj.style, ratio, (proj.duration_target_s ? proj.duration_target_s + 's' : '')].filter(Boolean).join(' / ')) + '</div>' +
     '</div>' +
     '<button id="replan-btn" class="btn btn-small">↻ 重新规划</button></div>' +
-    (proj.brief ? '<div class="brief-text">' + esc(proj.brief) + '</div>' : '<div class="empty-hint">暂无创作底稿</div>') +
+    '<label class="brief-editor-label" for="project-brief-editor">创作提示词 <span>修改后保存，重新规划时会使用最新内容</span></label>' +
+    '<textarea id="project-brief-editor" class="brief-editor" rows="7" placeholder="写下故事、人物、情绪、风格或已有素材的使用方式…">' + esc(proj.brief || '') + '</textarea>' +
+    '<div class="brief-editor-actions"><span>这不会自动覆盖现有分镜；需要重拆时再点“重新规划”。</span><button id="save-brief-btn" class="btn btn-projector btn-small">保存提示词</button></div>' +
   '</div>';
 
   if (!scenes.length) {
@@ -759,6 +750,25 @@ function renderScriptStep(el) {
     }).join('') + '</div>';
   }
   el.innerHTML = html;
+
+  $('#save-brief-btn').addEventListener('click', async () => {
+    const btn = $('#save-brief-btn');
+    const brief = $('#project-brief-editor').value;
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+    try {
+      const updated = await api('/projects/' + encodeURIComponent(state.currentProjectId), {
+        method: 'PATCH', json: { brief },
+      });
+      if (state.bundle && state.bundle.project) state.bundle.project.brief = updated.brief;
+      toast('创作提示词已保存', 'ok');
+    } catch (err) {
+      toast('保存提示词失败:' + err.message, 'err');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '保存提示词';
+    }
+  });
 
   $('#replan-btn').addEventListener('click', async () => {
     if (!confirm('重新规划?\n现有剧本场景、角色与分镜可能被替换;\n本地素材与成片文件仍保留。')) return;
@@ -1073,7 +1083,9 @@ function renderStoryboardStep(el) {
   const scenes = getScenes();
   const shots = getShots();
   if (!shots.length) {
-    el.innerHTML = '<div class="panel db-empty">还没有分镜 — 请先在「剧本」步完成规划。</div>';
+    el.innerHTML = renderManualShotComposer(scenes) +
+      '<div class="panel sb-empty"><div><b>还没有分镜</b><p>可以等待 AI 规划，也可以现在手动补充第一个镜头。没有场景时会自动新建“场景 01”。</p></div><button class="btn btn-projector btn-small sb-add-shot-btn">＋ 新增分镜</button></div>';
+    bindManualShotComposer(el);
     return;
   }
 
@@ -1094,7 +1106,7 @@ function renderStoryboardStep(el) {
   });
   if (ungrouped.shots.length) groups.push(ungrouped);
 
-  el.innerHTML = groups.map((g) => {
+  el.innerHTML = renderManualShotComposer(scenes) + groups.map((g) => {
     const sorted = g.shots.slice().sort(shotOrder);
     return '<div class="sb-scene-block">' +
       '<div class="sb-scene-head"><h3>' + esc(g.title) + '</h3><span>' + sorted.length + ' 个镜头</span></div>' +
@@ -1103,10 +1115,68 @@ function renderStoryboardStep(el) {
   }).join('');
 
   bindShotCardEvents(el);
+  bindManualShotComposer(el);
 
   // 有 run 处于生成中时每 5 秒轮询
   const busy = getRuns().some((r) => RUN_STATES_BUSY.includes(runState(r)));
   if (busy) state.stepTimer = setInterval(refreshQuiet, 5000);
+}
+
+function renderManualShotComposer(scenes) {
+  const options = (scenes || []).map((sc, i) => {
+    const id = sc.scene_id || sc.id;
+    return '<option value="' + esc(id) + '">' + esc(sc.title || ('场景 ' + String(i + 1).padStart(2, '0'))) + '</option>';
+  }).join('');
+  return '<div class="sb-toolbar"><div><div class="label">STORYBOARD</div><span>镜头画面与台词均可随时修改；保存后再提交生成。</span></div><button class="btn btn-projector btn-small sb-add-shot-btn">＋ 新增分镜</button></div>' +
+    '<div id="manual-shot-composer" class="panel manual-shot-composer hidden">' +
+      '<div class="manual-shot-head"><div><h3>补充一个镜头</h3><p>先写画面，再按需要补上角色台词。</p></div><button class="btn btn-ghost btn-small sb-cancel-shot-btn">取消</button></div>' +
+      '<div class="manual-shot-fields"><label>所属场景<select id="manual-shot-scene" class="field"><option value="">' + (options ? '自动选择第一个场景' : '自动创建场景 01') + '</option>' + options + '</select></label>' +
+      '<label>时长（秒）<input id="manual-shot-duration" class="field" type="number" min="1" max="120" value="5"></label></div>' +
+      '<label>镜头画面<textarea id="manual-shot-action" class="shot-action" rows="3" placeholder="例如：清晨的厨房里，女孩切开番茄，阳光落在蓝色餐盘上。"></textarea></label>' +
+      '<label>人物台词（可选）<textarea id="manual-shot-dialogue" class="shot-dialogue" rows="2" placeholder="例如：今天要做一顿特别的早餐。"></textarea></label>' +
+      '<div class="manual-shot-submit"><span>新建后仍可在卡片中继续编辑。</span><button class="btn btn-projector btn-small sb-create-shot-btn">创建分镜</button></div>' +
+    '</div>';
+}
+
+function bindManualShotComposer(el) {
+  const composer = el.querySelector('#manual-shot-composer');
+  const show = () => {
+    composer.classList.remove('hidden');
+    const action = composer.querySelector('#manual-shot-action');
+    if (action) action.focus();
+  };
+  el.querySelectorAll('.sb-add-shot-btn').forEach((btn) => btn.addEventListener('click', show));
+  const cancel = el.querySelector('.sb-cancel-shot-btn');
+  if (cancel) cancel.addEventListener('click', () => composer.classList.add('hidden'));
+  const create = el.querySelector('.sb-create-shot-btn');
+  if (create) create.addEventListener('click', () => createManualShot(el, create));
+}
+
+async function createManualShot(el, btn) {
+  const action = el.querySelector('#manual-shot-action').value.trim();
+  const duration = Number(el.querySelector('#manual-shot-duration').value || 0);
+  if (!action) { toast('先补充镜头画面描述', 'err'); return; }
+  if (!duration || duration < 1) { toast('镜头时长至少为 1 秒', 'err'); return; }
+  btn.disabled = true;
+  btn.textContent = '创建中…';
+  try {
+    await api('/projects/' + encodeURIComponent(state.currentProjectId) + '/shots', {
+      method: 'POST',
+      json: {
+        scene_id: el.querySelector('#manual-shot-scene').value || null,
+        action,
+        dialogue: el.querySelector('#manual-shot-dialogue').value,
+        duration_s: duration,
+      },
+    });
+    toast('分镜已创建，可继续编辑或直接生成', 'ok');
+    state.sbDrafts = {};
+    await refreshQuiet();
+  } catch (err) {
+    toast('创建分镜失败:' + err.message, 'err');
+    btn.disabled = false;
+    btn.textContent = '创建分镜';
+  }
 }
 
 function renderShotCard(shot, idx) {
@@ -1131,6 +1201,8 @@ function renderShotCard(shot, idx) {
   '</div>';
   html += '<textarea class="shot-action" data-shot-id="' + esc(sid) + '" rows="3" placeholder="镜头动作 / 画面描述">' +
     esc(draft.action != null ? draft.action : (spec.action || '')) + '</textarea>';
+  html += '<textarea class="shot-dialogue" data-shot-id="' + esc(sid) + '" rows="2" placeholder="人物台词（可选）">' +
+    esc(draft.dialogue != null ? draft.dialogue : (spec.dialogue || '')) + '</textarea>';
 
   if (refAssets.length || characters.length) {
     html += '<div class="chip-row">';
@@ -1193,6 +1265,9 @@ function bindShotCardEvents(el) {
   el.querySelectorAll('.shot-action').forEach((ta) => {
     ta.addEventListener('input', () => markShotDirty(ta.dataset.shotId, el));
   });
+  el.querySelectorAll('.shot-dialogue').forEach((ta) => {
+    ta.addEventListener('input', () => markShotDirty(ta.dataset.shotId, el));
+  });
   el.querySelectorAll('.shot-dur-input').forEach((inp) => {
     inp.addEventListener('input', () => markShotDirty(inp.dataset.shotId, el));
   });
@@ -1234,6 +1309,7 @@ function markShotDirty(sid, el) {
   if (!card) return;
   const draft = state.sbDrafts[sid] || {};
   draft.action = card.querySelector('.shot-action').value;
+  draft.dialogue = card.querySelector('.shot-dialogue').value;
   const dur = card.querySelector('.shot-dur-input').value;
   draft.duration_s = dur === '' ? undefined : Number(dur);
   state.sbDrafts[sid] = draft;
@@ -1248,6 +1324,7 @@ async function saveShot(sid, btn) {
   try {
     const body = {};
     if (draft.action !== undefined) body.action = draft.action;
+    if (draft.dialogue !== undefined) body.dialogue = draft.dialogue;
     if (draft.duration_s !== undefined && !isNaN(draft.duration_s)) body.duration_s = draft.duration_s;
     await api('/shots/' + encodeURIComponent(sid), { method: 'PATCH', json: body });
     delete state.sbDrafts[sid];
