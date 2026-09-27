@@ -19,19 +19,35 @@ from ...domain.video_constraints import SYSTEM_VIDEO_CONSTRAINTS
 from ..asset_store.local import FFMPEG, FFPROBE, _probe_ffprobe
 from ..text_model.client import TextModelClient, extract_json
 
-N_FRAMES = 4
+N_FRAMES = 4  # 仅供外部参考；实际采样位置见 GemmaVisionJudge.FRAME_POSITIONS
 ACCEPT_MIN = 0.75
 REPAIR_MAX = 0.6
 
 _JUDGE_INSTRUCTIONS = """\
 You are a strict video quality judge for short drama shots.
-You are given {n} evenly sampled frames from one generated clip.
+You are given {n} frames sampled from one generated clip: the FIRST frame,
+two middle frames and the LAST frame, in chronological order.
 
 The shot must satisfy ALL of these required points:
 {required}
 
 It must NOT contain any of these forbidden elements:
 {forbidden}
+
+Key-object continuity contract (compare across ALL frames, especially
+first vs last):
+{object_states}
+
+Object-continuity checks you MUST perform explicitly:
+- object count: does the count of each key object stay constant across
+  frames? (two identical plates / duplicated food => fail)
+- support: is any object floating or hovering without contact/support?
+- interaction: are hand-object grasps and contacts physically plausible?
+- state arc: do the start_state and end_state hold in the first and last
+  frame respectively, without being mixed into the same frame?
+Report violations as issue tags: "object_popping" (object appears/vanishes
+or count changes), "continuity_break" (start/end states mixed or broken),
+"anatomy_error", "extra_person".
 
 Score each dimension from 0.0 to 1.0:
 - identity: characters match their reference / description
@@ -43,6 +59,8 @@ Score each dimension from 0.0 to 1.0:
 - story_linkage: characters, landscape and props visibly respond to the same
   narrative event instead of moving independently or remaining decorative
 - continuity: identity, clothes, location layout and key props stay consistent
+- object_consistency: key-object counts stay constant, nothing floats,
+  hand-object contacts hold, start/end states are not mixed
 - artifact_free: no extra people, malformed anatomy/hands, object popping or
   disappearing, slideshow/static-image simulation
 - text_ok: no garbled/extra on-screen text
@@ -59,12 +77,28 @@ Also report:
 Respond with ONE JSON object only:
 {{"identity": 0-1, "action": 0-1, "scene": 0-1, "text_ok": 0-1,
   "motion": 0-1, "story_linkage": 0-1, "continuity": 0-1,
-  "artifact_free": 0-1,
+  "object_consistency": 0-1, "artifact_free": 0-1,
   "verdict": "accept|accept_with_deviation|repair|reject",
   "deviation": "str",
   "observation_confidence": "high|medium|low",
   "observed_end_state": "str",
   "issues": ["short failure tags"]}}"""
+
+
+def _object_states_block(spec: ShotSpec) -> str:
+    lines: list[str] = []
+    for o in spec.object_states or []:
+        if not isinstance(o, dict):
+            continue
+        name = str(o.get("name") or "").strip()
+        if not name:
+            continue
+        count = str(o.get("count") or "").strip()
+        start = str(o.get("start_state") or "").strip()
+        end = str(o.get("end_state") or "").strip()
+        lines.append(f"- {name}: count={count or 'unspecified'}, "
+                     f"start={start or 'unspecified'}, end={end or 'unspecified'}")
+    return "\n".join(lines) or "- (no key objects specified; still apply the checks)"
 
 
 class GemmaVisionJudge:
@@ -78,12 +112,16 @@ class GemmaVisionJudge:
             model=model or settings.VISION_MODEL_NAME, timeout=timeout)
 
     # ------------------------------------------------------------ frames ---
+    # 采样位置：首帧 + 两个中间帧 + 末帧。首/末帧对物体连续性检查
+    # （数量恒定、初末态不混帧）至关重要，不能用纯均匀采样避开两端。
+    FRAME_POSITIONS = (0.04, 0.36, 0.68, 0.96)
+
     def _extract_frames(self, video_path: str, duration: float) -> list[Path]:
         frames: list[Path] = []
         tmpdir = Path(tempfile.mkdtemp(prefix="svf_frames_"))
         span = duration if duration > 0 else 4.0
-        for i in range(N_FRAMES):
-            t = span * (i + 0.5) / N_FRAMES
+        for i, pos in enumerate(self.FRAME_POSITIONS):
+            t = span * pos
             out = tmpdir / f"frame_{i}.png"
             try:
                 subprocess.run(
@@ -133,6 +171,7 @@ class GemmaVisionJudge:
                                     n=len(frames),
                                     required="\n".join(f"- {r}" for r in spec.acceptance.required) or "- (none)",
                                     forbidden="\n".join(f"- {f}" for f in spec.acceptance.forbidden) or "- (none)",
+                                    object_states=_object_states_block(spec),
                                 ) + "\n" + SYSTEM_VIDEO_CONSTRAINTS}]
         for frame in frames:
             b64 = base64.b64encode(frame.read_bytes()).decode("ascii")
@@ -163,6 +202,9 @@ class GemmaVisionJudge:
                 parsed.get("story_linkage", scores["action"]))))
             scores["continuity"] = max(0.0, min(1.0, float(
                 parsed.get("continuity", min(scores["identity"], scores["scene"])))))
+            # 物体一致性：新版维度；旧评审模型未返回时回退 continuity
+            scores["object_consistency"] = max(0.0, min(1.0, float(
+                parsed.get("object_consistency", scores["continuity"]))))
             scores["artifact_free"] = max(0.0, min(1.0, float(
                 parsed.get("artifact_free", scores["text_ok"]))))
             issues = [str(i) for i in parsed.get("issues") or []]

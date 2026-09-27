@@ -28,7 +28,9 @@ class PromptPolisherAgent:
             "pan, zoom, crop, Ken Burns effect or slideshow. Include the approved "
             "character/scene lock unchanged, a visible action with start and end "
             "states, and a separate environment or prop movement that supports the "
-            "same story beat. "
+            "same story beat. When object_states are given, keep every listed "
+            "object's count constant and honor its start/end states exactly; "
+            "objects must never duplicate, float, clip or pop in/out. "
             + SYSTEM_VIDEO_CONSTRAINTS + " "
             "Address the past failure notes if any are given."
         )
@@ -43,6 +45,7 @@ class PromptPolisherAgent:
             "acceptance_forbidden": spec.acceptance.forbidden,
             "narrative_beat": spec.narrative_beat,
             "motion_contract": spec.motion_contract,
+            "object_states": spec.object_states,
             "past_failures": failures or [],
         }
         out = self.text_model.chat_json(instructions, payload, _SCHEMA_HINT)

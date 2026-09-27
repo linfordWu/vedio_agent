@@ -123,6 +123,7 @@ class ShotPatch(BaseModel):
     dialogue: Optional[str] = None
     duration_s: Optional[int] = None
     camera: Optional[dict[str, str]] = None
+    object_states: Optional[list[dict[str, str]]] = None
 
 
 class ExportRequest(BaseModel):
@@ -210,6 +211,14 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                 "你是短剧导演 agent。把场景拆成有序镜头，只输出 JSON。"
                 "shot.characters 填本镜头出现的角色/地点名，必须与给定清单逐字一致；"
                 "同一角色在所有镜头中外观描述逐字一致，场景描述同理。"
+                "动作拆分原则：一个镜头只承担一个主动作（如「端盘落桌」），"
+                "不要把多个主动作（做早餐+端盘+猫靠近）塞进同一镜头；"
+                "猫、窗帘、蒸汽、窗外景色等次要元素只允许微动，不得抢占主事件。"
+                "object_states 列出本镜头的关键物体（餐盘/食物/动物/道具），"
+                "每个物体写清：name 名称、count 数量（如「仅一只」）、"
+                "start_state 开始状态（如「在女孩手中」「桌面为空」）、"
+                "end_state 结束状态（如「盘子在桌面中央，双手离开」）；"
+                "物体不得复制、悬浮、穿模、突然出现或消失。"
                 "每个镜头的 beats 分三桶：already_happened=已演完不许重播的情节、"
                 "this_clip_only=本镜头独占的节拍、reserved_for_later=后续镜头预留"
                 "不许提前泄露的节拍；felt_intent=角色内心意图（不进画面描述）。"
@@ -233,6 +242,8 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                 '"secondary_motion":str,"end_state":str,"camera_motion":str},'
                 '"beats":{"already_happened":[str],"this_clip_only":[str],'
                 '"reserved_for_later":[str]},'
+                '"object_states":[{"name":str,"count":str,'
+                '"start_state":str,"end_state":str}],'
                 '"aspect_ratio":str,"camera":{str:str},'
                 '"acceptance":{"required":[str],"forbidden":[str]}}]}')
             for j, d in enumerate(sh.get("shots") or []):
@@ -264,6 +275,17 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                                     "seamless_continuation", "next_shot",
                                     "reanchor"):
                     relation = "sequence_first" if j == 0 else "next_shot"
+                # 关键物体连续性契约：只保留四要素齐全的有效条目
+                object_states = []
+                for o in d.get("object_states") or []:
+                    if not isinstance(o, dict) or not str(o.get("name") or "").strip():
+                        continue
+                    object_states.append({
+                        "name": str(o.get("name") or ""),
+                        "count": str(o.get("count") or ""),
+                        "start_state": str(o.get("start_state") or ""),
+                        "end_state": str(o.get("end_state") or ""),
+                    })
                 spec = ShotSpec(
                     shot_id=shot_id,
                     action=str(d.get("action", "")),
@@ -275,6 +297,7 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                     reference_assets=ref_assets,
                     sequence_relation=relation,
                     beats=beats,
+                    object_states=object_states,
                     felt_intent=str(d.get("felt_intent", "")),
                     narrative_beat=str(d.get("narrative_beat", "")),
                     motion_contract={str(k): str(v) for k, v
@@ -345,10 +368,33 @@ def _compose_prompt(project: Optional[Project], shot: Shot,
     reserved = [str(b) for b in beats.get("reserved_for_later") or [] if str(b).strip()]
     if reserved:
         parts.append("不要提前出现: " + "；".join(reserved))
+    # 关键物体连续性契约：数量 + 初末状态逐条写死，防止复制/悬浮/混帧
+    obj_lines = []
+    for o in spec.object_states or []:
+        if not isinstance(o, dict):
+            continue
+        name = str(o.get("name") or "").strip()
+        if not name:
+            continue
+        seg = name
+        if str(o.get("count") or "").strip():
+            seg += f"（{str(o['count']).strip()}）"
+        start = str(o.get("start_state") or "").strip()
+        end = str(o.get("end_state") or "").strip()
+        if start or end:
+            seg += f"：开始[{start or '保持现状'}] → 结束[{end or '保持'}]"
+        obj_lines.append(seg)
+    if obj_lines:
+        parts.append("关键物体约束(全片数量恒定,不得复制/悬浮/穿模/突现/消失): "
+                     + "；".join(obj_lines))
+        parts.append("动作开始状态与结束状态必须分别成立,不得混合在同一帧")
     # 多人三层动作层级：非焦点人物只允许微动
     if len(spec.characters) >= 2:
         parts.append("非焦点人物保持自然微动(呼吸/眨眼)，不得擅自起身/走动/拿取物品；"
                      "只有焦点角色执行主要动作")
+    # 次要元素（动物/窗帘/蒸汽/远景）只允许微动，不与主动作抢事件
+    parts.append("次要元素(动物、窗帘、蒸汽、窗外远景)只做轻微响应式微动，"
+                 "不得引入新的叙事事件或与主动作竞争视觉焦点")
     # Source-Carries-State：外观与场景由参考图承载，文字只写动作与变化
     if spec.reference_assets:
         parts.append("参考图是角色、场景和关键道具的唯一视觉锚点，逐帧严格保持；"
@@ -589,6 +635,25 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                                              summary=f"{len(made)} portraits"))
             except Exception:
                 log.warning("portrait step skipped for %s", pid, exc_info=True)
+            # 镜头首帧图：固定关键物体的初始状态(数量/位置/姿态),
+            # 用首帧约束代替纯文本,防止初末态混帧与物体复制
+            try:
+                from ...agents.first_frame import generate_shot_first_frames
+                model = image_model or _make_image_model()
+                if model.available():
+                    store.append_event(Event(project_id=pid,
+                                             type="first_frame.started",
+                                             actor="orchestrator",
+                                             summary="generating first frames"))
+                    made_ff = generate_shot_first_frames(
+                        store, model, pid, style=project.style)
+                    store.append_event(Event(project_id=pid,
+                                             type="first_frame.completed",
+                                             actor="orchestrator",
+                                             summary=f"{len(made_ff)} first frames"))
+            except Exception:
+                log.warning("first-frame step skipped for %s", pid,
+                            exc_info=True)
             shots = sorted(store.all("shots", project_id=pid),
                            key=lambda s: (s.scene_id, s.order))
             # mode=assets：所有图片素材设进每个 shot 的 reference_assets
@@ -821,6 +886,14 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             shot.spec.duration_s = body.duration_s
         if body.camera is not None:
             shot.spec.camera = {str(k): str(v) for k, v in body.camera.items()}
+        if body.object_states is not None:
+            shot.spec.object_states = [
+                {"name": str(o.get("name") or ""),
+                 "count": str(o.get("count") or ""),
+                 "start_state": str(o.get("start_state") or ""),
+                 "end_state": str(o.get("end_state") or "")}
+                for o in body.object_states
+                if isinstance(o, dict) and str(o.get("name") or "").strip()]
         store.put("shots", shot)
         store.append_event(Event(project_id=shot.project_id, type="shot.updated",
                                  actor="api", summary=shot.shot_id))
@@ -1243,6 +1316,37 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         threading.Thread(target=_run_portraits,
                          name=f"svf-casting-{project_id}", daemon=True).start()
         return {"status": "casting"}
+
+    @app.post("/projects/{project_id}/shots/first-frames", status_code=202)
+    def shot_first_frames(project_id: str) -> dict:
+        """为带 object_states 的镜头生成首帧参考图(后台线程,首帧约束)。"""
+        project = _get_or_404("projects", project_id)
+
+        def _run_first_frames() -> None:
+            from ...agents.first_frame import generate_shot_first_frames
+            try:
+                store.append_event(Event(project_id=project_id,
+                                         type="first_frame.started",
+                                         actor="api",
+                                         summary="generating first frames"))
+                model = image_model or _make_image_model()
+                made = generate_shot_first_frames(
+                    store, model, project_id, style=project.style)
+                store.append_event(Event(project_id=project_id,
+                                         type="first_frame.completed",
+                                         actor="api",
+                                         summary=f"{len(made)} first frames"))
+            except Exception as exc:
+                log.exception("first-frame generation failed for %s",
+                              project_id)
+                store.append_event(Event(project_id=project_id,
+                                         type="first_frame.failed", actor="api",
+                                         summary=str(exc)[:300]))
+
+        threading.Thread(target=_run_first_frames,
+                         name=f"svf-firstframe-{project_id}",
+                         daemon=True).start()
+        return {"status": "generating_first_frames"}
 
     @app.get("/projects/{project_id}/director-review")
     def get_director_review(project_id: str) -> dict:

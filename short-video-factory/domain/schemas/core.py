@@ -118,6 +118,11 @@ class ShotSpec(BaseModel):
     # 三桶节拍：already_happened 已演完不许重播 / this_clip_only 本镜头独占 /
     # reserved_for_later 后续镜头预留不许泄露
     beats: dict[str, list[str]] = Field(default_factory=dict)
+    # 关键物体连续性契约：每条形如
+    # {"name": "煎蛋盘", "count": "仅一只", "start_state": "在女孩手中",
+    #  "end_state": "在木桌中央且双手离开"}
+    # 渲染提示词与视觉评审共用，防止数量复制/悬浮/初末态混帧。
+    object_states: list[dict[str, Any]] = Field(default_factory=list)
     observed_end_state: str = ""    # 验收时由评审写回的实际末态（供下一镜接续）
     felt_intent: str = ""           # 内部意图，不进提示词
     extension_depth: int = 0        # 链式续拍深度
