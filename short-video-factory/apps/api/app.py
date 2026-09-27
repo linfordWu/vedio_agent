@@ -384,6 +384,23 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             pid = p.project_id
             p_shots = [s for s in shots if s.project_id == pid]
             p_chars = [c for c in chars if c.project_id == pid]
+            p_assets = [a for a in assets if a.project_id == pid]
+            # 首页/项目库直接预览：优先用最新派生成片；没有成片时，回退到已验收镜头的候选视频。
+            preview = next((a for a in sorted(p_assets, key=lambda a: a.created_at,
+                                              reverse=True)
+                            if a.media_type == "video" and a.source == "derived"), None)
+            if preview is None:
+                accepted_runs = {
+                    s.accepted_run_id for s in p_shots if s.accepted_run_id
+                }
+                for run in sorted((r for r in runs if r.run_id in accepted_runs),
+                                  key=lambda r: r.created_at, reverse=True):
+                    preview = next((store.get("assets", aid)
+                                    for aid in run.candidate_asset_ids
+                                    if store.get("assets", aid)
+                                    and store.get("assets", aid).media_type == "video"), None)
+                    if preview is not None:
+                        break
             progress = {
                 "scenes": sum(1 for s in scenes if s.project_id == pid),
                 "shots": len(p_shots),
@@ -392,13 +409,15 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                 "characters": sum(1 for c in p_chars if c.kind == "character"),
                 "locations": sum(1 for c in p_chars if c.kind == "location"),
                 "portraits": sum(1 for c in p_chars if c.asset_id),
-                "props": sum(1 for a in assets
+                "props": sum(1 for a in p_assets
                              if a.project_id == pid and a.category == "prop"),
-                "exports": sum(1 for a in assets
+                "exports": sum(1 for a in p_assets
                                if a.project_id == pid and a.source == "derived"
                                and a.media_type == "video"),
             }
-            out.append({**p.model_dump(), "progress": progress})
+            out.append({**p.model_dump(), "progress": progress,
+                        "preview_video_asset_id": preview.asset_id if preview else None,
+                        "preview_video_kind": "export" if preview and preview.source == "derived" else "clip"})
         return {"projects": out}
 
     @app.post("/projects", status_code=201)

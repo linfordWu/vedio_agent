@@ -165,6 +165,31 @@ function assetName(a) {
   return (a.storage_key || '').split('/').pop() || a.filename || a.name || id;
 }
 
+function openProjectVideo(assetId, title, kind) {
+  const modal = $('#project-video-modal');
+  if (!modal || !assetId) return;
+  $('#project-video-title').textContent = (title || '项目') + (kind === 'export' ? ' · 成片预览' : ' · 镜头预览');
+  $('#project-video-body').innerHTML = '<video src="/assets/' + encodeURIComponent(assetId) + '/file" controls autoplay preload="metadata"></video>';
+  modal.classList.remove('hidden');
+}
+
+function closeProjectVideo() {
+  const modal = $('#project-video-modal');
+  if (!modal) return;
+  const video = modal.querySelector('video');
+  if (video) video.pause();
+  $('#project-video-body').innerHTML = '';
+  modal.classList.add('hidden');
+}
+
+$('#project-video-close').addEventListener('click', closeProjectVideo);
+$('#project-video-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeProjectVideo();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeProjectVideo();
+});
+
 /* ---------- Hash 路由 ---------- */
 function parseHash() {
   const h = location.hash.slice(1) || '/';
@@ -296,6 +321,8 @@ function renderProjectCards() {
     const updatedTxt = updatedDate && !isNaN(updatedDate.getTime()) && updatedDate.getFullYear() >= 2000
       ? updatedDate.toLocaleDateString('zh-CN') : '';
     const status = projectStatus(p);
+    const previewAssetId = p.preview_video_asset_id;
+    const previewKind = p.preview_video_kind || 'clip';
     const ratio = p.aspect_ratio || p.ratio || '';
     const segs = SEG_DEFS.map((s, i) =>
       '<div><div class="proj-seg-bar' + (s.lit(pg) ? ' lit-' + i : '') + '"></div>' +
@@ -303,7 +330,11 @@ function renderProjectCards() {
     const stats = '剧本 ' + num(pg.scenes) + ' · 镜头 ' + num(pg.accepted) + '/' + num(pg.shots) +
       ' · 角色 ' + num(pg.characters) + ' · 定妆 ' + num(pg.portraits) + ' · 成片 ' + num(pg.exports);
     return '<article class="panel proj-card" data-id="' + esc(id) + '">' +
-      '<div class="proj-cover"><span class="proj-status ' + status.key + '">' + status.label + '</span></div>' +
+      '<div class="proj-cover">' +
+        (previewAssetId ? '<video src="/assets/' + encodeURIComponent(previewAssetId) + '/file" preload="metadata" muted></video>' : '') +
+        '<span class="proj-status ' + status.key + '">' + status.label + '</span>' +
+        (previewAssetId ? '<button class="proj-play" data-asset-id="' + esc(previewAssetId) + '" data-title="' + esc(p.title || '项目') + '" data-kind="' + esc(previewKind) + '">▶ <span>播放</span></button>' : '') +
+      '</div>' +
       '<div class="proj-card-main">' +
         '<div class="proj-card-updated">' + (updatedTxt ? 'UPDATED ' + esc(updatedTxt) : '') + '</div>' +
         '<h3 class="proj-card-title">' + esc(p.title || '(无标题)') + '</h3>' +
@@ -321,6 +352,12 @@ function renderProjectCards() {
   grid.querySelectorAll('.db-del-btn').forEach((btn) => {
     btn.addEventListener('click', () => deleteProject(btn.dataset.id, btn.dataset.title));
   });
+  grid.querySelectorAll('.proj-play').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openProjectVideo(btn.dataset.assetId, btn.dataset.title, btn.dataset.kind);
+    });
+  });
 }
 
 function renderHomeStudio(projects) {
@@ -336,6 +373,8 @@ function renderHomeStudio(projects) {
   const id = project.project_id || project.id;
   const pg = project.progress || {};
   const active = projectStatus(project);
+  const previewAssetId = project.preview_video_asset_id;
+  const previewKind = project.preview_video_kind || 'clip';
   const stepItems = SEG_DEFS.map((step, i) =>
     '<span class="home-step' + (step.lit(pg) ? ' done' : '') + '"><b>' + String(i + 1) + '</b>' + esc(step.label) + '</span>').join('');
   el.innerHTML = '<div class="home-studio-head"><div><div class="label">PRODUCTION STUDIO</div><h2>制片工作台</h2></div>' +
@@ -344,9 +383,12 @@ function renderHomeStudio(projects) {
     '<div class="home-studio-meta">' + esc([project.genre, project.style, project.aspect_ratio || project.ratio].filter(Boolean).join(' · ') || '本地短剧项目') + '</div>' +
     '<div class="home-stepper">' + stepItems + '</div>' +
     '<div class="home-stills"><span></span><span></span><span></span></div>' +
+    (previewAssetId ? '<button class="btn btn-small home-video-preview" data-asset-id="' + esc(previewAssetId) + '" data-title="' + esc(project.title || '项目') + '" data-kind="' + esc(previewKind) + '">▶ 查看视频</button>' : '') +
     '<button class="btn btn-projector btn-small home-studio-open" data-id="' + esc(id) + '">进入工作台 <b>→</b></button>';
   const open = el.querySelector('.home-studio-open');
   if (open) open.addEventListener('click', () => go('#/studio/' + encodeURIComponent(open.dataset.id)));
+  const preview = el.querySelector('.home-video-preview');
+  if (preview) preview.addEventListener('click', () => openProjectVideo(preview.dataset.assetId, preview.dataset.title, preview.dataset.kind));
 }
 
 async function deleteProject(id, title) {

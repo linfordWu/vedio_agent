@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>镜界 · 短剧工坊</title>
-<link rel="stylesheet" href="./style.css?v=16">
+<link rel="stylesheet" href="./style.css?v=17">
 </head>
 <body>
 
@@ -186,6 +186,14 @@
 
 <div id="toast-container" class="toast-container"></div>
 
-<script src="./app.js?v=14"></script>
+<!-- 首页 / 项目库视频预览 -->
+<div id="project-video-modal" class="project-video-modal hidden" role="dialog" aria-modal="true" aria-labelledby="project-video-title">
+  <div class="project-video-dialog">
+    <div class="project-video-head"><span id="project-video-title">项目视频预览</span><button id="project-video-close" class="btn btn-ghost btn-small" aria-label="关闭视频预览">关闭 ✕</button></div>
+    <div id="project-video-body" class="project-video-body"></div>
+  </div>
+</div>
+
+<script src="./app.js?v=15"></script>
 </body>
 </html>
