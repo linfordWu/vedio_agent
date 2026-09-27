@@ -121,5 +121,35 @@ def test_portraits_endpoint(env):
     cast = {c.name: c for c in store.all("characters", project_id=pid)}
     assert cast["小林"].asset_id
     assert cast["老人"].asset_id
-    assert not cast["便利店"].asset_id  # 地点不生成
+    assert cast["便利店"].asset_id  # 地点也生成场景参考图
     assert cast["路人"].asset_id == "asset_existing"  # 已有参考不覆盖
+
+
+def test_location_references_generated_and_appended(env):
+    client, store, asset_store, image_model = env
+    pid = "p_test_loc"
+    ch1, ch2, loc, has_ref = _make_cast(store, pid)
+    shot = Shot(shot_id="shot_loc", scene_id="scene_x", project_id=pid, order=0,
+                spec=ShotSpec(shot_id="shot_loc",
+                              characters=[{"character_id": loc.character_id,
+                                           "name": "便利店", "kind": "location",
+                                           "description": loc.description}]))
+    store.put("shots", shot)
+
+    from svf.agents.casting import generate_location_references
+    made = generate_location_references(store, image_model, pid,
+                                        style="写实电影感")
+
+    # 只有缺参考图的地点生成;角色跳过
+    assert set(made) == {loc.character_id}
+    assert len(image_model.prompts) == 1
+    assert "空镜无人物" in image_model.prompts[0]
+    assert "广角全景" in image_model.prompts[0]
+    # asset_id 写回 + 素材归类 location + 追加到镜头末尾(不抢首锚)
+    assert store.get("characters", loc.character_id).asset_id == \
+        made[loc.character_id]
+    assert store.get("assets", made[loc.character_id]).category == "location"
+    assert store.get("shots", "shot_loc").spec.reference_assets[-1] == \
+        made[loc.character_id]
+    # 幂等
+    assert generate_location_references(store, image_model, pid) == {}

@@ -620,7 +620,8 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             _run_plan(store, text_model, project)
             # 角色定妆照：像素级身份锁定(图片服务不可用时跳过,仅文字锁定)
             try:
-                from ...agents.casting import generate_character_portraits
+                from ...agents.casting import (
+                    generate_character_portraits, generate_location_references)
                 model = image_model or _make_image_model()
                 if model.available():
                     store.append_event(Event(project_id=pid,
@@ -629,10 +630,13 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                                              summary="generating portraits"))
                     made = generate_character_portraits(
                         store, model, pid, style=project.style)
+                    made_loc = generate_location_references(
+                        store, model, pid, style=project.style)
                     store.append_event(Event(project_id=pid,
                                              type="casting.completed",
                                              actor="orchestrator",
-                                             summary=f"{len(made)} portraits"))
+                                             summary=f"{len(made)} portraits, "
+                                                     f"{len(made_loc)} locations"))
             except Exception:
                 log.warning("portrait step skipped for %s", pid, exc_info=True)
             # 镜头首帧图：固定关键物体的初始状态(数量/位置/姿态),
@@ -1293,11 +1297,12 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
 
     @app.post("/projects/{project_id}/characters/portraits", status_code=202)
     def character_portraits(project_id: str) -> dict:
-        """为缺参考图的角色生成定妆照(后台线程,像素级身份锁定)。"""
+        """为缺参考图的角色/地点生成定妆照与场景参考图(后台线程)。"""
         project = _get_or_404("projects", project_id)
 
         def _run_portraits() -> None:
-            from ...agents.casting import generate_character_portraits
+            from ...agents.casting import (
+                generate_character_portraits, generate_location_references)
             try:
                 store.append_event(Event(project_id=project_id,
                                          type="casting.started", actor="api",
@@ -1305,9 +1310,12 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                 model = image_model or _make_image_model()
                 made = generate_character_portraits(
                     store, model, project_id, style=project.style)
+                made_loc = generate_location_references(
+                    store, model, project_id, style=project.style)
                 store.append_event(Event(project_id=project_id,
                                          type="casting.completed", actor="api",
-                                         summary=f"{len(made)} portraits"))
+                                         summary=f"{len(made)} portraits, "
+                                                 f"{len(made_loc)} locations"))
             except Exception as exc:
                 log.exception("portrait generation failed for %s", project_id)
                 store.append_event(Event(project_id=project_id,
