@@ -217,3 +217,36 @@ def test_plan_force_replan(env):
     assert len(events) > old_events
     assert any(e.type == "plan.reset" for e in events)
     assert any(e.type == "project.created" for e in events)
+
+
+# ---------------------------------------------------- task summary planning --
+def test_task_summary_counts_planning_phase(env):
+    """一键成片编排中(尚无 run)的项目必须计入等待;失败/已完成的不计。"""
+    from svf.domain.schemas.core import Event
+    client, store, _, _ = env
+    pid_planning = make_project(client)
+    pid_failed = make_project(client)
+    pid_done = make_project(client)
+    store.append_event(Event(project_id=pid_planning, type="quick.started",
+                             actor="orchestrator"))
+    store.append_event(Event(project_id=pid_failed, type="quick.started",
+                             actor="orchestrator"))
+    store.append_event(Event(project_id=pid_failed, type="quick.failed",
+                             actor="orchestrator", summary="boom"))
+    store.append_event(Event(project_id=pid_done, type="quick.started",
+                             actor="orchestrator"))
+    store.append_event(Event(project_id=pid_done, type="quick.orchestrated",
+                             actor="orchestrator"))
+
+    summary = client.get("/projects").json()["task_summary"]
+    assert summary["waiting_projects"] == 1   # 只有编排中的那个
+    assert summary["eta_seconds"] == 90
+
+
+def test_task_summary_manual_project_not_counted(env):
+    """手动建的工作室项目(无 quick 事件、无 run)不计入队列。"""
+    client, store, _, _ = env
+    make_project(client)
+    summary = client.get("/projects").json()["task_summary"]
+    assert summary["waiting_projects"] == 0
+    assert summary["eta_seconds"] == 0

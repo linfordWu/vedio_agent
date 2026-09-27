@@ -486,6 +486,15 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         runs = store.all("runs")
         chars = store.all("characters")
         assets = store.all("assets")
+        # 规划期(编剧/导演/定妆/首帧)尚无 run,不能漏掉:
+        # 预先聚合每个项目的编排事件,区分"一键成片编排中"与"已结束/失败"
+        plan_terminal: dict[str, str] = {}
+        quick_started: set[str] = set()
+        for e in store.all("events"):
+            if e.type == "quick.started":
+                quick_started.add(e.project_id)
+            elif e.type in ("quick.orchestrated", "quick.failed", "plan.failed"):
+                plan_terminal[e.project_id] = e.type
         out = []
         running_states = {"RENDERING", "GENERATED", "NORMALIZING", "SCORING",
                           "REPAIRING", "CANCEL_REQUESTED"}
@@ -538,6 +547,10 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                 task_summary["waiting_projects"] += 1
             elif p_shots and len(p_shots) == progress["accepted"]:
                 task_summary["completed_projects"] += 1
+            elif not p_runs and pid in quick_started \
+                    and pid not in plan_terminal:
+                # 一键成片编排中(规划/定妆/首帧,run 尚未创建):计入等待
+                task_summary["waiting_projects"] += 1
             out.append({**p.model_dump(), "progress": progress,
                         "preview_video_asset_id": preview.asset_id if preview else None,
                         "preview_video_kind": "export" if preview and preview.source == "derived" else "clip"})
