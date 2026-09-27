@@ -63,7 +63,13 @@ Score each dimension from 0.0 to 1.0:
   hand-object contacts hold, start/end states are not mixed
 - artifact_free: no extra people, malformed anatomy/hands, object popping or
   disappearing, slideshow/static-image simulation
-- text_ok: no garbled/extra on-screen text
+- text_ok: no clearly readable characters, letters, digits, subtitles,
+  watermarks or logos overlaid on the scene. Decorative
+  paintings/pictures on walls, fabric patterns, food textures and other
+  in-world decorations are NOT text — do not penalize them. If you score
+  text_ok below 0.6 you MUST also add an issue tag (garbled_text,
+  watermark, logo, subtitle_artifact or on_screen_text) naming exactly
+  where the text is and what it reads
 
 Also report:
 - verdict: "accept" | "accept_with_deviation" | "repair" | "reject" —
@@ -218,22 +224,30 @@ class GemmaVisionJudge:
             parse_failed = True
 
         hard_passed = all(hard.values())
+        # 文字类失败必须有标签佐证(说出文字位置/内容)才算数:
+        # gemma3 级小模型对花纹/挂画/蒸汽的 text_ok 裸零分假阳性率很高
+        text_tags = {"garbled_text", "watermark", "logo", "subtitle_artifact",
+                     "on_screen_text"}
+        text_confirmed = any(i in text_tags for i in issues)
         hard_visual_failure = any(issue in (
             "static_image_simulation", "camera_motion_only", "story_disconnected",
             "continuity_break", "identity_drift", "extra_person", "anatomy_error",
             "object_popping",
-        ) for issue in issues)
+        ) for issue in issues) or text_confirmed
+        # 无佐证的 text_ok 低分降级为提示,不参与一票否决
+        effective = {k: v for k, v in scores.items()
+                     if not (k == "text_ok" and not text_confirmed)}
         if hard_visual_failure:
             verdict = "repair"
         elif parse_failed:
             verdict = "uncertain"
         elif model_verdict == "accept_with_deviation" \
-                and all(v >= REPAIR_MAX for v in scores.values()):
+                and all(v >= REPAIR_MAX for v in effective.values()):
             # 基本符合但有可接受偏差：放行但记录偏差说明
             verdict = "accept_with_deviation"
-        elif any(v < REPAIR_MAX for v in scores.values()):
+        elif any(v < REPAIR_MAX for v in effective.values()):
             verdict = "repair"
-        elif all(v >= ACCEPT_MIN for v in scores.values()):
+        elif all(v >= ACCEPT_MIN for v in effective.values()):
             verdict = "accept"
         else:
             verdict = "uncertain"
