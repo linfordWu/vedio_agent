@@ -172,6 +172,7 @@ function parseHash() {
   const path = qIdx >= 0 ? h.slice(0, qIdx) : h;
   const params = new URLSearchParams(qIdx >= 0 ? h.slice(qIdx + 1) : '');
   const parts = path.split('/').filter(Boolean);
+  if (parts[0] === 'projects') return { view: 'projects' };
   if (parts[0] === 'new') return { view: 'new' };
   if (parts[0] === 'studio' && parts[1]) {
     return { view: 'studio', projectId: decodeURIComponent(parts[1]), step: params.get('step') || 'script' };
@@ -199,7 +200,9 @@ async function render() {
     await enterStudio(r.projectId, r.step);
   } else {
     closeSSE();
-    $('#view-dashboard').classList.remove('hidden');
+    const dashboard = $('#view-dashboard');
+    dashboard.classList.toggle('is-project-library', r.view === 'projects');
+    dashboard.classList.remove('hidden');
     await renderDashboard();
   }
 }
@@ -227,6 +230,9 @@ $$('.db-view-btn').forEach((btn) => btn.addEventListener('click', () => {
 
 async function renderDashboard() {
   const grid = $('#db-grid');
+  const isLibrary = state.route.view === 'projects';
+  $('#db-section-label').textContent = isLibrary ? 'PROJECT LIBRARY' : 'RECENT PROJECTS';
+  $('#db-section-title').textContent = isLibrary ? '我的项目' : '最近创作';
   grid.innerHTML = '<div class="panel db-empty">正在读取本地片库…</div>';
   try {
     const res = await api('/projects');
@@ -270,17 +276,19 @@ function renderProjectCards() {
     if (state.dbSort === 'title') return String(a.title || '').localeCompare(String(b.title || ''), 'zh-CN');
     return String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || ''));
   });
-  grid.classList.toggle('is-list', state.dbView === 'list');
-  renderHomeStudio(list.length ? list : state.projects);
+  const isLibrary = state.route.view === 'projects';
+  const shownProjects = isLibrary ? list : list.slice(0, 3);
+  grid.classList.toggle('is-list', isLibrary && state.dbView === 'list');
+  if (!isLibrary) renderHomeStudio(state.projects);
   if (!state.projects.length) {
     grid.innerHTML = '<div class="panel db-empty">片场还是空的 — 点右上角「建立新片场」开始第一部短剧。</div>';
     return;
   }
-  if (!list.length) {
+  if (!shownProjects.length) {
     grid.innerHTML = '<div class="panel db-empty">没有匹配「' + esc(state.dbQuery) + '」的项目。</div>';
     return;
   }
-  grid.innerHTML = list.map((p) => {
+  grid.innerHTML = shownProjects.map((p) => {
     const id = p.project_id || p.id;
     const pg = p.progress || {};
     const updated = p.updated_at || p.created_at;

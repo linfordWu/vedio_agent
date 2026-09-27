@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>镜界 · 短剧工坊</title>
-<link rel="stylesheet" href="./style.css?v=14">
+<link rel="stylesheet" href="./style.css?v=15">
 </head>
 <body>
 
@@ -15,8 +15,8 @@
       <span>JINGJIE</span><small>镜界 · 本地片场</small>
     </a>
     <nav class="dashboard-nav" aria-label="首页导航">
-      <a class="active" href="#/"><b>⌂</b> 首页</a>
-      <a href="#projects"><b>▣</b> 我的项目</a>
+      <a class="active" data-dashboard-view="home" href="#/"><b>⌂</b> 首页</a>
+      <a data-dashboard-view="projects" href="#/projects"><b>▣</b> 我的项目</a>
       <a href="#/new"><b>＋</b> 创建项目</a>
     </nav>
     <div class="sidebar-quote">用 AI，拍出更好的故事。<small>A SMALL STUDIO<br>FOR BIGGER STORIES</small></div>
@@ -41,8 +41,8 @@
       <section id="projects" class="db-section">
         <div class="db-section-head">
           <div>
-            <div class="label">MY PROJECTS</div>
-            <h2 class="section-title">我的项目</h2>
+            <div id="db-section-label" class="label">RECENT PROJECTS</div>
+            <h2 id="db-section-title" class="section-title">最近创作</h2>
           </div>
           <div class="db-actions">
             <input type="text" id="db-search" class="field db-search" placeholder="搜索片名或题材…">
@@ -58,6 +58,7 @@
           <button class="db-filter" data-filter="active">创作中</button>
           <button class="db-filter" data-filter="complete">已完成</button>
         </div>
+        <a id="recent-all-link" class="recent-all-link" href="#/projects">查看全部项目 <span>→</span></a>
         <div id="db-grid" class="db-grid">
           <div class="panel db-empty">正在读取本地片库…</div>
         </div>
@@ -185,6 +186,6 @@
 
 <div id="toast-container" class="toast-container"></div>
 
-<script src="./app.js?v=13"></script>
+<script src="./app.js?v=14"></script>
 </body>
 </html>

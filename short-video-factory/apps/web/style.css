@@ -1183,6 +1183,9 @@ body {
 
 .dashboard-lower { display: grid; grid-template-columns: minmax(0, 1fr) 286px; gap: 36px; align-items: start; }
 .dashboard-lower .db-section { min-width: 0; margin-top: 34px; }
+.dashboard-lower .db-actions, .dashboard-lower .db-filter-row { display: none; }
+.recent-all-link { display: inline-flex; gap: 6px; margin: 2px 0 15px; color: var(--accent-ink); font-size: 12px; font-weight: 700; text-decoration: none; }
+.recent-all-link span { font-size: 15px; line-height: .8; }
 .dashboard-lower .db-section-head { flex-wrap: nowrap; align-items: flex-end; }
 .db-actions { min-width: 0; display: grid; grid-template-columns: minmax(150px, 1fr) auto auto; gap: 7px; align-items: center; }
 .db-actions .db-search { width: 100%; min-width: 0; max-width: none; }
@@ -1231,6 +1234,22 @@ body {
 .home-stills span:nth-child(3) { background-position: 98% center; }
 .home-studio-open { width: 100%; margin-top: 16px; }
 .home-studio-empty { margin: 19px 0 20px; color: var(--muted); font-size: 12px; line-height: 1.75; }
+
+/* 项目库是独立路由：首页只展示最近创作。 */
+.dashboard-shell.is-project-library .hero { display: none; }
+.dashboard-shell.is-project-library .dashboard-lower { display: block; }
+.dashboard-shell.is-project-library .dashboard-lower .db-section { max-width: none; margin-top: 36px; }
+.dashboard-shell.is-project-library .dashboard-lower .db-actions,
+.dashboard-shell.is-project-library .dashboard-lower .db-filter-row { display: flex; }
+.dashboard-shell.is-project-library .db-actions { display: grid; }
+.dashboard-shell.is-project-library .recent-all-link,
+.dashboard-shell.is-project-library .home-studio { display: none; }
+.dashboard-shell.is-project-library .dashboard-lower .db-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.dashboard-shell.is-project-library .dashboard-lower .db-grid.is-list { grid-template-columns: 1fr; }
+.dashboard-shell.is-project-library .dashboard-nav a.active { background: transparent; color: #5E5654; }
+.dashboard-shell.is-project-library .dashboard-nav a.active b { color: #8B807D; }
+.dashboard-shell.is-project-library .dashboard-nav a[data-dashboard-view="projects"] { background: #FCE5E1; color: var(--accent); }
+.dashboard-shell.is-project-library .dashboard-nav a[data-dashboard-view="projects"] b { color: var(--accent); }
 
 @media (max-width: 1080px) {
   #view-dashboard.dashboard-shell { grid-template-columns: 1fr; }
