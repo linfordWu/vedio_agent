@@ -115,6 +115,7 @@ class CharacterPatch(BaseModel):
     """角色卡片就地编辑;None 字段不动,空串 asset_id 表示清除参考图。"""
     description: Optional[str] = None
     asset_id: Optional[str] = None
+    kind: Optional[Literal["character", "location"]] = None
 
 
 class ShotPatch(BaseModel):
@@ -173,6 +174,9 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
             store.append_event(ev("agent.started", "director", "extracting cast"))
             cast_out = text_model.chat_json(
                 "你是短剧导演 agent。从剧本提取全部角色和固定地点清单，只输出 JSON。"
+                "人物、动物、宠物、幻想生物一律 kind=character；"
+                "kind=location 只指固定场景/建筑/空间（如厨房、便利店、街道），"
+                "不要把动物或人物登记成地点。"
                 "每个角色的 description 写成可复用的固定外观描述"
                 "（如「艾米:20岁女孩,及肩黑发,米色毛衣」），地点同理；"
                 "同一角色/地点的描述在所有镜头中必须逐字一致。",
@@ -841,6 +845,8 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         ch = _get_or_404("characters", character_id)
         if body.description is not None:
             ch.description = body.description
+        if body.kind is not None:
+            ch.kind = body.kind
         if body.asset_id is not None:
             if body.asset_id:
                 _get_or_404("assets", body.asset_id)
