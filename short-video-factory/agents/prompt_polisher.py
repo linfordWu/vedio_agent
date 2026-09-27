@@ -31,6 +31,10 @@ class PromptPolisherAgent:
             "same story beat. When object_states are given, keep every listed "
             "object's count constant and honor its start/end states exactly; "
             "objects must never duplicate, float, clip or pop in/out. "
+            "Audio rule: if dialogue lines are present they are spoken in "
+            "Mandarin Chinese; if no dialogue is given, the clip must contain "
+            "ambient sound and action foley only — no speech, no murmuring, "
+            "no foreign-language voices. "
             + SYSTEM_VIDEO_CONSTRAINTS + " "
             "Address the past failure notes if any are given."
         )

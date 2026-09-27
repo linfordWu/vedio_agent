@@ -177,6 +177,8 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
                 "人物、动物、宠物、幻想生物一律 kind=character；"
                 "kind=location 只指固定场景/建筑/空间（如厨房、便利店、街道），"
                 "不要把动物或人物登记成地点。"
+                "每个场景的发生地必须登记为一个 location（如「乡村厨房」），"
+                "地点清单不允许为空。"
                 "每个角色的 description 写成可复用的固定外观描述"
                 "（如「艾米:20岁女孩,及肩黑发,米色毛衣」），地点同理；"
                 "同一角色/地点的描述在所有镜头中必须逐字一致。",
@@ -364,6 +366,10 @@ def _compose_prompt(project: Optional[Project], shot: Shot,
             parts.append(f"{label}: {value}")
     if spec.dialogue:
         parts.append(f"台词: {spec.dialogue}")
+        parts.append("音频: 中文普通话对白 + 贴合场景的环境音")
+    else:
+        # 无台词时显式禁止人声,防止模型自行发挥生成外语腔人声
+        parts.append("音频: 仅环境音与动作音效,无对白、无人声、无外语呢喃")
     if spec.camera:
         parts.append("镜头: " + ", ".join(f"{k}={v}" for k, v in spec.camera.items()))
     # 三桶节拍：已演不重演、未来不泄露
