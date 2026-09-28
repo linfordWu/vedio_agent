@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>镜界 · 短剧工坊</title>
 <link rel="icon" type="image/svg+xml" href="./assets/jingjie-logo.svg">
-<link rel="stylesheet" href="./style.css?v=39">
+<link rel="stylesheet" href="./style.css?v=40">
 </head>
 <body>
 
@@ -44,6 +44,7 @@
       <a class="active" data-dashboard-view="home" href="#/"><b>⌂</b> 首页</a>
       <a data-dashboard-view="projects" href="#/projects"><b>▣</b> 我的项目</a>
       <a data-dashboard-view="tasks" href="#/tasks"><b>◔</b> 任务</a>
+      <a data-dashboard-view="assets" href="#/assets"><b>▤</b> 资产</a>
       <a data-dashboard-view="new" href="#/new"><b>＋</b> 创建项目</a>
       <a data-dashboard-view="oneclick" href="#/oneclick"><b>▶&#xFE0E;</b> 一键出片</a>
       <a data-dashboard-view="chat" href="#/chat"><b>✦</b> 对话出片</a>
@@ -320,6 +321,46 @@
   <div id="oc-progress" class="oc-progress hidden"></div>
 </section>
 
+<!-- ============ 视图:资产 #/assets ============ -->
+<section id="view-assets" class="view hidden">
+  <header class="assets-head">
+    <a href="#/" class="hero-back">← 返回片库</a>
+    <div class="assets-head-row">
+      <div>
+        <div class="label">ASSET GALLERY</div>
+        <h1>资产</h1>
+        <p>按任务看中途资产：材料 → 定妆 → 场景参考 → 镜头首帧 → 镜头片段（含 TAKE）→ 成片。</p>
+      </div>
+      <div class="assets-filters">
+        <select id="assets-project" class="field assets-select" aria-label="按项目筛选"></select>
+        <button id="assets-refresh" class="btn btn-small">↻ 刷新</button>
+      </div>
+    </div>
+    <div class="assets-chips">
+      <div class="assets-chip-row" id="assets-type">
+        <span class="assets-chip-label">类型</span>
+        <button class="preset-pill active" data-type="all">全部</button>
+        <button class="preset-pill" data-type="image">图片</button>
+        <button class="preset-pill" data-type="video">视频</button>
+        <button class="preset-pill" data-type="text">文本</button>
+      </div>
+      <div class="assets-chip-row" id="assets-group">
+        <span class="assets-chip-label">阶段</span>
+        <button class="preset-pill active" data-group="all">全部</button>
+        <button class="preset-pill" data-group="material">材料</button>
+        <button class="preset-pill" data-group="portrait">定妆</button>
+        <button class="preset-pill" data-group="location">场景</button>
+        <button class="preset-pill" data-group="first_frame">首帧</button>
+        <button class="preset-pill" data-group="clip">片段</button>
+        <button class="preset-pill" data-group="export">成片</button>
+      </div>
+    </div>
+  </header>
+  <div id="assets-list" class="assets-list">
+    <div class="panel db-empty">加载资产中…</div>
+  </div>
+</section>
+
 <!-- ============ 视图三:工作室 #/studio/{id}?step=xxx ============ -->
 <section id="view-studio" class="view hidden">
   <div id="studio-root" class="studio-root">
@@ -348,6 +389,6 @@
   </div>
 </div>
 
-<script src="./app.js?v=30"></script>
+<script src="./app.js?v=32"></script>
 </body>
 </html>

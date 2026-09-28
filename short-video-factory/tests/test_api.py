@@ -569,3 +569,75 @@ def test_startup_cancels_orphan_runs(tmp_path):
     finally:
         app.state.engine.shutdown()
         store.close()
+
+
+def test_assets_gallery_classifies_stages(tmp_path):
+    """资产画廊:按生产结构归档(材料/定妆/场景/首帧/片段/成片),孤儿资产单列。"""
+    from svf.domain.schemas.core import (Asset, AssetBinding, Character, Project,
+                                         Run, Scene, Shot, ShotSpec)
+    store = Store(tmp_path / "factory.db")
+    asset_store = FakeAssetStore(tmp_path / "assets")
+    app = create_app(store, asset_store, renderer=FakeRenderer(asset_store),
+                     judge=FakeJudge(), text_model=None,
+                     data_dir=str(tmp_path / "data"),
+                     worker_poll_interval_s=0.05)
+    client = TestClient(app)
+    try:
+        project = Project(title="资产测试", brief="b", duration_target_s=12)
+        store.put("projects", project)
+        scene = Scene(scene_id="sc1", project_id=project.project_id, order=0,
+                      title="场景")
+        store.put("scenes", scene)
+        shot = Shot(shot_id="sh1", scene_id="sc1",
+                    project_id=project.project_id, order=0,
+                    spec=ShotSpec(shot_id="sh1", action="走近"))
+        store.put("shots", shot)
+        store.put("characters", Character(project_id=project.project_id, name="小夏",
+                                          kind="character", asset_id="a_portrait"))
+        store.put("characters", Character(project_id=project.project_id, name="便利店",
+                                          kind="location", asset_id="a_loc"))
+
+        def put_asset(aid, media, source, category="", metadata=None, pid=None):
+            store.put("assets", Asset(
+                asset_id=aid, project_id=pid or project.project_id,
+                source=source, media_type=media, category=category,
+                storage_key=f"{pid or project.project_id}/{aid}/f.bin",
+                metadata=metadata or {}, status="READY"))
+
+        put_asset("a_portrait", "image", "generated", "character")
+        put_asset("a_loc", "image", "generated", "location")
+        put_asset("a_ff", "image", "generated", "location")
+        store.put("bindings", AssetBinding(shot_id="sh1", asset_id="a_ff",
+                                           asset_version=1, role="first_frame"))
+        put_asset("a_text", "text", "imported", "other",
+                  {"original_filename": "剧本.md", "size_bytes": 123})
+        run = Run(shot_id="sh1", project_id=project.project_id, state="ACCEPTED",
+                  candidate_asset_ids=["a_clip"], seed=2026)
+        store.put("runs", run)
+        shot.accepted_run_id = run.run_id
+        store.put("shots", shot)
+        put_asset("a_clip", "video", "generated", "footage", {"size": 456})
+        put_asset("a_export", "video", "derived", "export", {"size": 789})
+        put_asset("a_orphan", "video", "generated", "", pid="p_gone")
+
+        data = client.get("/assets/gallery").json()
+        proj = next(p for p in data["projects"]
+                    if p["project_id"] == project.project_id)
+        g = proj["groups"]
+        assert [a["asset_id"] for a in g["portrait"]] == ["a_portrait"]
+        assert [a["asset_id"] for a in g["location"]] == ["a_loc"]
+        assert g["first_frame"][0]["asset_id"] == "a_ff"
+        assert g["first_frame"][0]["shot_no"] == 1
+        clip = g["clip"][0]
+        assert (clip["shot_no"], clip["take"], clip["accepted"]) == (1, 1, True)
+        assert clip["run_state"] == "ACCEPTED" and clip["seed"] == 2026
+        assert [a["asset_id"] for a in g["export"]] == ["a_export"]
+        assert g["material"][0]["filename"] == "剧本.md"
+        assert any(a["asset_id"] == "a_orphan" for a in data["orphans"])
+        # 单项目过滤:只返回该项目,不含孤儿
+        only = client.get(
+            f"/assets/gallery?project_id={project.project_id}").json()
+        assert len(only["projects"]) == 1 and not only["orphans"]
+    finally:
+        app.state.engine.shutdown()
+        store.close()

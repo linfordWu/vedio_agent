@@ -1696,6 +1696,143 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             where["media_type"] = media_type
         return store.all("assets", **where)
 
+    @app.get("/assets/gallery")
+    def assets_gallery(project_id: Optional[str] = None) -> dict:
+        """中途资产画廊:按「项目 -> 生产阶段」聚合全部资产。
+
+        阶段判定优先用生产结构(比分类器可靠):材料/定妆/场景参考/镜头首帧/
+        镜头片段(含 TAKE 序号与是否被采用)/成片/其他;项目已删除的资产归入
+        orphans(文件仍在磁盘)。
+        """
+        projects = store.all("projects")
+        scenes = store.all("scenes")
+        shots = store.all("shots")
+        runs = store.all("runs")
+        chars = store.all("characters")
+        bindings = store.all("bindings")
+        assets = store.all("assets")
+
+        scene_order = {s.scene_id: s.order for s in scenes}
+        by_project_shots: dict[str, list[Shot]] = {}
+        for shot in shots:
+            by_project_shots.setdefault(shot.project_id, []).append(shot)
+        shot_no: dict[str, int] = {}
+        for group in by_project_shots.values():
+            group.sort(key=lambda s: (scene_order.get(s.scene_id, 0), s.order))
+            for i, shot in enumerate(group, start=1):
+                shot_no[shot.shot_id] = i
+        shot_by_id = {s.shot_id: s for s in shots}
+
+        # run -> 候选视频;同一镜头的 run 按时间编号为 TAKE 1/2/3…
+        run_by_asset: dict[str, Run] = {}
+        take_no: dict[str, int] = {}
+        shot_take_counter: dict[str, int] = {}
+        for run in sorted(runs, key=lambda r: r.created_at):
+            shot_take_counter[run.shot_id] = \
+                shot_take_counter.get(run.shot_id, 0) + 1
+            take_no[run.run_id] = shot_take_counter[run.shot_id]
+            for aid in run.candidate_asset_ids:
+                run_by_asset[aid] = run
+
+        char_by_asset = {c.asset_id: c for c in chars if c.asset_id}
+        first_frame_shots = {b.asset_id: b.shot_id for b in bindings
+                             if b.role == "first_frame"}
+
+        groups = ("material", "portrait", "location", "first_frame",
+                  "clip", "export", "other")
+        buckets: dict[str, dict[str, list]] = {}
+        orphans: list[dict] = []
+        project_by_id = {p.project_id: p for p in projects}
+        latest: dict[str, float] = {}
+
+        def item_of(a: Asset) -> dict:
+            meta = a.metadata or {}
+            return {
+                "asset_id": a.asset_id,
+                "media_type": a.media_type,
+                "source": a.source,
+                "category": a.category,
+                "filename": meta.get("original_filename")
+                or a.storage_key.rsplit("/", 1)[-1],
+                "size": meta.get("size_bytes") or meta.get("size") or 0,
+                "width": meta.get("width"),
+                "height": meta.get("height"),
+                "created_at": a.created_at,
+            }
+
+        for asset in sorted(assets, key=lambda a: a.created_at):
+            if project_id and asset.project_id != project_id:
+                continue
+            item = item_of(asset)
+            group = "other"
+            if asset.source == "derived":
+                group = "export"
+            elif asset.media_type == "text" or asset.source == "imported":
+                group = "material"
+            elif asset.media_type == "image":
+                ch = char_by_asset.get(asset.asset_id)
+                if ch is not None:
+                    group = "portrait" if ch.kind == "character" else "location"
+                    item["label"] = ch.name
+                elif asset.asset_id in first_frame_shots:
+                    group = "first_frame"
+                    item["shot_id"] = first_frame_shots[asset.asset_id]
+                    item["shot_no"] = shot_no.get(item["shot_id"])
+                elif asset.source == "generated":
+                    group = "other"
+                else:
+                    group = "material"
+            elif asset.media_type == "video":
+                run = run_by_asset.get(asset.asset_id)
+                if run is not None:
+                    group = "clip"
+                    shot = shot_by_id.get(run.shot_id)
+                    item.update({
+                        "run_id": run.run_id,
+                        "shot_id": run.shot_id,
+                        "shot_no": shot_no.get(run.shot_id),
+                        "take": take_no.get(run.run_id),
+                        "seed": run.seed,
+                        "run_state": run.state,
+                        "accepted": bool(shot
+                                         and shot.accepted_run_id == run.run_id),
+                    })
+                elif asset.source == "generated":
+                    group = "clip"
+                else:
+                    group = "material"
+            elif asset.media_type == "audio":
+                group = "material"
+            item["group"] = group
+            if asset.project_id in project_by_id:
+                bucket = buckets.setdefault(
+                    asset.project_id, {g: [] for g in groups})
+                bucket[group].append(item)
+                latest[asset.project_id] = max(
+                    latest.get(asset.project_id, 0), asset.created_at)
+            else:
+                orphans.append(item)
+
+        out_projects = []
+        for pid, bucket in buckets.items():
+            project = project_by_id[pid]
+            counts = {g: len(bucket[g]) for g in groups}
+            if not any(counts.values()):
+                continue
+            out_projects.append({
+                "project_id": pid,
+                "title": project.title,
+                "aspect_ratio": project.aspect_ratio,
+                "duration_target_s": project.duration_target_s,
+                "material_name": project.source_material_name,
+                "updated_at": latest.get(pid, project.created_at),
+                "counts": counts,
+                "groups": bucket,
+            })
+        out_projects.sort(key=lambda p: p["updated_at"], reverse=True)
+        return {"projects": out_projects, "orphans": orphans,
+                "groups": list(groups)}
+
     @app.post("/assets/{asset_id}/category")
     def set_asset_category(asset_id: str, body: CategorySet) -> Asset:
         asset = _get_or_404("assets", asset_id)

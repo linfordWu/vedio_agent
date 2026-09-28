@@ -41,6 +41,7 @@ const state = {
   producePending: false,   // 项目生产线程在跑(定妆/首帧/排队),SSE 事件驱动
   ocMode: 'auto',          // 一键出片模式: auto=全自动 / confirm=素材后确认
   ocMaterial: null,        // 一键出片上传的材料:{name, text|docxB64, chars}
+  assetsView: { project: 'all', type: 'all', group: 'all' },   // 资产页筛选
   // SSE
   es: null,
   lastSeq: 0,
@@ -182,10 +183,32 @@ function assetName(a) {
 }
 
 function openProjectVideo(assetId, title, kind) {
+  openAssetPreview(assetId, title, 'video', kind);
+}
+
+// 通用资产预览:视频 / 图片 / 文本 共用同一个弹窗
+function openAssetPreview(assetId, title, mediaType, kind) {
   const modal = $('#project-video-modal');
   if (!modal || !assetId) return;
-  $('#project-video-title').textContent = (title || '项目') + (kind === 'export' ? ' · 成片预览' : ' · 镜头预览');
-  $('#project-video-body').innerHTML = '<video src="/assets/' + encodeURIComponent(assetId) + '/file" controls autoplay preload="metadata"></video>';
+  const suffix = kind === 'export' ? ' · 成片预览'
+    : mediaType === 'image' ? ' · 图片预览'
+      : mediaType === 'text' ? ' · 文本预览' : ' · 镜头预览';
+  $('#project-video-title').textContent = (title || '资产') + suffix;
+  const url = '/assets/' + encodeURIComponent(assetId) + '/file';
+  const body = $('#project-video-body');
+  if (mediaType === 'image') {
+    body.innerHTML = '<img class="asset-preview-img" src="' + url + '" alt="">';
+  } else if (mediaType === 'text') {
+    body.innerHTML = '<pre class="asset-preview-text">加载中…</pre>';
+    fetch(url).then((r) => r.text()).then((t) => {
+      body.innerHTML = '<pre class="asset-preview-text">' + esc(t.slice(0, 30000)) + '</pre>';
+    }).catch(() => {
+      body.innerHTML = '<pre class="asset-preview-text">文本加载失败</pre>';
+    });
+  } else {
+    body.innerHTML = '<video src="' + url +
+      '" controls autoplay preload="metadata"></video>';
+  }
   modal.classList.remove('hidden');
 }
 
@@ -217,6 +240,7 @@ function parseHash() {
   if (parts[0] === 'new') return { view: 'new' };
   if (parts[0] === 'chat') return { view: 'chat' };
   if (parts[0] === 'tasks') return { view: 'tasks' };
+  if (parts[0] === 'assets') return { view: 'assets' };
   if (parts[0] === 'oneclick') {
     return { view: 'oneclick', project: params.get('project') || '' };
   }
@@ -239,10 +263,11 @@ async function render() {
   const r = parseHash();
   state.route = r;
   ['view-dashboard', 'view-new', 'view-studio', 'view-chat', 'view-tasks',
-   'view-oneclick'].forEach((id) => $('#' + id).classList.add('hidden'));
+   'view-oneclick', 'view-assets'].forEach((id) => $('#' + id).classList.add('hidden'));
   // 侧栏一级导航激活态
   const navMap = { dashboard: 'home', projects: 'projects', new: 'new',
-                   chat: 'chat', tasks: 'tasks', oneclick: 'oneclick' };
+                   chat: 'chat', tasks: 'tasks', oneclick: 'oneclick',
+                   assets: 'assets' };
   const activeNav = navMap[r.view] || '';
   $$('[data-dashboard-view]').forEach((a) => {
     a.classList.toggle('active', a.dataset.dashboardView === activeNav);
@@ -262,6 +287,10 @@ async function render() {
     closeSSE();
     $('#view-oneclick').classList.remove('hidden');
     await renderOneclickView();
+  } else if (r.view === 'assets') {
+    closeSSE();
+    $('#view-assets').classList.remove('hidden');
+    await renderAssetsView();
   } else if (r.view === 'studio') {
     $('#view-studio').classList.remove('hidden');
     await enterStudio(r.projectId, r.step);
@@ -1614,6 +1643,159 @@ $$('.oc-suggest button').forEach((btn) => {
     input.focus();
   });
 });
+
+/* ---------- 视图:资产 #/assets ---------- */
+const ASSET_GROUPS = [
+  ['material', '📄 材料', '文档 / 导入素材'],
+  ['portrait', '🎭 角色定妆', '身份锁定参考图'],
+  ['location', '🏞 场景参考', '空间与光线锁定'],
+  ['first_frame', '🎬 镜头首帧', '关键物体初始状态'],
+  ['clip', '🎞 镜头片段', '逐镜渲染 TAKE'],
+  ['export', '📦 成片', '拼接输出'],
+  ['other', '🗂 其他', '未归类资产'],
+];
+const ASSET_GROUP_NAME = { material: '材料', portrait: '定妆', location: '场景',
+                           first_frame: '首帧', clip: '片段', export: '成片',
+                           other: '其他' };
+
+async function renderAssetsView() {
+  await refreshAssetsGallery();
+}
+
+async function refreshAssetsGallery() {
+  try {
+    state.gallery = await api('/assets/gallery');
+  } catch (err) {
+    const list = $('#assets-list');
+    if (list) {
+      list.innerHTML = '<div class="panel db-empty">资产加载失败：' +
+        esc(err.message) + '</div>';
+    }
+    return;
+  }
+  drawAssetsGallery();
+}
+
+function assetMetaLine(a) {
+  const type = { image: '图片', video: '视频', text: '文本',
+                 audio: '音频' }[a.media_type] || a.media_type;
+  return [type, a.size ? fmtBytes(a.size) : '',
+          (a.width && a.height) ? a.width + '×' + a.height : '']
+    .filter(Boolean).join(' · ');
+}
+
+function renderAssetTile(a, group) {
+  const url = '/assets/' + encodeURIComponent(a.asset_id) + '/file';
+  const name = a.filename || a.asset_id;
+  let badge = '';
+  if (group === 'clip') {
+    const shotLabel = a.shot_no ? 'SHOT ' + String(a.shot_no).padStart(2, '0')
+      : '历史片段';
+    const takeLabel = a.take ? ' · TAKE ' + a.take : '';
+    badge = '<span class="asset-badge' + (a.accepted ? ' ok' : '') + '">' +
+      shotLabel + takeLabel + (a.accepted ? ' ✓ 已采用' : '') + '</span>';
+  } else if (group === 'first_frame') {
+    badge = '<span class="asset-badge">SHOT ' +
+      String(a.shot_no || '?').padStart(2, '0') + '</span>';
+  } else if (a.label) {
+    badge = '<span class="asset-badge">' + esc(a.label) + '</span>';
+  }
+  const isPortrait = a.media_type === 'image'
+    && (!a.width || !a.height || a.height >= a.width);
+  const thumb = a.media_type === 'image'
+    ? '<img class="' + (isPortrait ? 'portrait' : '') + '" src="' + url +
+      '" loading="lazy" alt="">'
+    : a.media_type === 'text'
+      ? '<div class="asset-thumb-text">📄</div>'
+      : '<div class="asset-thumb-video">▶</div>';
+  return '<div class="asset-tile" data-asset="' +
+    esc(a.asset_id) + '" data-type="' + esc(a.media_type) + '" data-name="' +
+    esc(name) + '" data-group="' + esc(group) + '">' +
+    '<div class="asset-thumb">' + thumb + '</div>' +
+    '<div class="asset-tile-body">' + badge +
+    '<div class="asset-tile-name" title="' + esc(name) + '">' + esc(name) + '</div>' +
+    '<div class="asset-tile-meta">' + esc(assetMetaLine(a)) + '</div>' +
+    '</div></div>';
+}
+
+function drawAssetsGallery() {
+  const view = state.assetsView;
+  const data = state.gallery || { projects: [], orphans: [] };
+  const sel = $('#assets-project');
+  if (sel) {
+    sel.innerHTML = ['<option value="all">全部项目（' +
+      (data.projects || []).length + '）</option>']
+      .concat((data.projects || []).map((p) => '<option value="' +
+        esc(p.project_id) + '"' + (view.project === p.project_id ? ' selected' : '') +
+        '>' + esc(p.title || p.project_id) + '</option>')).join('');
+  }
+  const projects = (data.projects || []).filter(
+    (p) => view.project === 'all' || p.project_id === view.project);
+  let html = '';
+  for (const p of projects) {
+    const sections = ASSET_GROUPS
+      .filter(([g]) => view.group === 'all' || view.group === g)
+      .map(([g, label, hint]) => {
+        const items = (p.groups[g] || []).filter(
+          (a) => view.type === 'all' || a.media_type === view.type);
+        if (!items.length) return '';
+        return '<div class="asset-group"><div class="asset-group-head"><b>' + label +
+          '</b><span>' + items.length + ' · ' + esc(hint) + '</span></div>' +
+          '<div class="asset-grid">' +
+          items.map((a) => renderAssetTile(a, g)).join('') + '</div></div>';
+      }).join('');
+    if (!sections) continue;
+    const counts = Object.entries(p.counts || {}).filter(([, n]) => n)
+      .map(([g, n]) => (ASSET_GROUP_NAME[g] || g) + ' ' + n).join(' · ');
+    html += '<article class="panel asset-project"><div class="asset-project-head">' +
+      '<div><h2>' + esc(p.title || p.project_id) + '</h2>' +
+      '<div class="asset-project-meta">' + esc(counts) +
+      (p.material_name ? ' · 材料：' + esc(p.material_name) : '') + '</div></div>' +
+      '<button class="btn btn-small asset-open-btn" data-id="' + esc(p.project_id) +
+      '">打开工作室</button></div>' + sections + '</article>';
+  }
+  const orphans = (data.orphans || []).filter(
+    (a) => view.type === 'all' || a.media_type === view.type);
+  if (orphans.length && view.project === 'all' &&
+      (view.group === 'all' || view.group === 'clip')) {
+    html += '<article class="panel asset-project asset-orphans">' +
+      '<details class="asset-orphan-details"><summary><b>已删除项目的资产（' +
+      orphans.length + '）</b><span>项目记录已删除，文件仍保留在磁盘 · 点击展开</span>' +
+      '</summary><div class="asset-grid">' +
+      orphans.map((a) => renderAssetTile(a, a.group)).join('') +
+      '</div></details></article>';
+  }
+  const list = $('#assets-list');
+  if (list) {
+    list.innerHTML = html ||
+      '<div class="panel db-empty">这个筛选下还没有资产。</div>';
+  }
+  $$('.asset-tile').forEach((el) => el.addEventListener('click', () => {
+    openAssetPreview(el.dataset.asset, el.dataset.name, el.dataset.type,
+                     el.dataset.group === 'export' ? 'export' : '');
+  }));
+  $$('.asset-open-btn').forEach((btn) => btn.addEventListener('click', () => {
+    go('#/studio/' + encodeURIComponent(btn.dataset.id) + '?step=storyboard');
+  }));
+}
+
+$('#assets-refresh').addEventListener('click', refreshAssetsGallery);
+$('#assets-project').addEventListener('change', (e) => {
+  state.assetsView.project = e.target.value;
+  drawAssetsGallery();
+});
+$$('#assets-type .preset-pill').forEach((btn) => btn.addEventListener('click', () => {
+  state.assetsView.type = btn.dataset.type;
+  $$('#assets-type .preset-pill').forEach(
+    (b) => b.classList.toggle('active', b === btn));
+  drawAssetsGallery();
+}));
+$$('#assets-group .preset-pill').forEach((btn) => btn.addEventListener('click', () => {
+  state.assetsView.group = btn.dataset.group;
+  $$('#assets-group .preset-pill').forEach(
+    (b) => b.classList.toggle('active', b === btn));
+  drawAssetsGallery();
+}));
 
 /* ---------- 视图三:工作室骨架 ---------- */
 function getRuns() {

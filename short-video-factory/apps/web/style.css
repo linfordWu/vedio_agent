@@ -433,7 +433,7 @@ select.field { padding: 8px 10px; }
 .entity-card { overflow: hidden; position: relative; display: flex; flex-direction: column; }
 .entity-card:hover { border-color: var(--line-strong); box-shadow: var(--shadow-md); }
 .entity-img-wrap { position: relative; height: 220px; background: var(--panel-2); }
-.entity-img-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.entity-img-wrap img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 14%; display: block; }
 .entity-img-placeholder {
   height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 6px; color: var(--faint); font-size: 12px;
@@ -581,7 +581,7 @@ select.field { padding: 8px 10px; }
 .chip.char { background: var(--accent-soft); color: var(--step-character); }
 .ref-chip { position: relative; display: inline-block; }
 .ref-chip img {
-  width: 56px; height: 40px; object-fit: cover; display: block;
+  width: 56px; height: 40px; object-fit: cover; object-position: 50% 15%; display: block;
   border-radius: 6px; border: 1px solid var(--line-strong);
 }
 .ref-chip .ref-x {
@@ -1764,7 +1764,7 @@ body {
 .oc-confirm { border-color: var(--accent); }
 .oc-confirm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-top: 14px; }
 .oc-confirm-grid a { display: block; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--media-bg); }
-.oc-confirm-grid img { display: block; width: 100%; height: 104px; object-fit: cover; }
+.oc-confirm-grid img { display: block; width: 100%; height: 104px; object-fit: cover; object-position: 50% 12%; }
 
 /* 一键出片:材料上传 */
 .oc-material-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
@@ -1772,3 +1772,51 @@ body {
 .oc-material-chip { display: inline-flex; align-items: center; gap: 6px; }
 .oc-material-x { border: none; background: transparent; color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer; padding: 0 2px; }
 .oc-material-x:hover { color: var(--danger-ink); }
+
+/* ---- 资产画廊 ---- */
+#view-assets { max-width: 1400px; margin: 0 auto; padding: 24px 28px 60px; }
+.assets-head { padding: 10px 0 16px; }
+.assets-head .hero-back { display: inline-block; margin: 0 0 22px; color: var(--muted); font-size: 13px; }
+.assets-head-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.assets-head-row h1 { margin: 5px 0 6px; font-family: "Songti SC", STSong, Georgia, serif; font-size: 32px; letter-spacing: -.035em; }
+.assets-head-row p { color: var(--muted); font-size: 14px; }
+.assets-filters { display: flex; gap: 10px; align-items: center; }
+.assets-select { width: 260px; }
+.assets-chips { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.assets-chip-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.assets-chip-label { font-size: 11px; color: var(--faint); letter-spacing: .1em; margin-right: 4px; }
+.assets-list { display: flex; flex-direction: column; gap: 16px; }
+.asset-project { padding: 16px 18px 14px; }
+.asset-project-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+.asset-project-head h2 { margin: 0; font-family: "Songti SC", STSong, Georgia, serif; font-size: 20px; }
+.asset-project-meta { margin-top: 5px; font-size: 12px; color: var(--muted); }
+.asset-group { border-top: 1px dashed var(--line); padding-top: 12px; margin-top: 12px; }
+.asset-group:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+.asset-group-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.asset-group-head b { font-size: 13px; color: var(--ink); }
+.asset-group-head span { font-size: 11px; color: var(--faint); }
+.asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px; }
+.asset-tile { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--panel); cursor: pointer; transition: border-color .12s ease, transform .12s ease, box-shadow .12s ease; }
+.asset-tile:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+.asset-thumb { height: 110px; background: var(--media-bg); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.asset-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 50%; display: block; }
+/* 竖构图人像优先展示脸和上半身,不要从正中裁到腰腿 */
+.asset-thumb img.portrait { object-position: 50% 12%; }
+.asset-thumb-video, .asset-thumb-text { font-size: 22px; color: rgba(255, 255, 255, .72); }
+.asset-tile-body { padding: 8px 10px 9px; display: flex; flex-direction: column; gap: 3px; }
+.asset-badge { align-self: flex-start; font-family: var(--mono); font-size: 10px; letter-spacing: .04em; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-badge); padding: 1px 7px; }
+.asset-badge.ok { color: var(--ok-ink); background: var(--ok-bg); border-color: #CFE4D8; }
+.asset-tile-name { font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asset-tile-meta { font-size: 10.5px; color: var(--faint); font-family: var(--mono); }
+.asset-orphans { border-color: var(--warn); background: var(--warn-bg); }
+.asset-preview-img { max-width: 100%; max-height: 74vh; display: block; margin: 0 auto; border-radius: 10px; }
+.asset-preview-text { max-height: 70vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12px; line-height: 1.7; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 0; }
+@media (max-width: 700px) {
+  #view-assets { padding: 16px 16px 48px; }
+  .assets-filters { width: 100%; }
+  .assets-select { width: 100%; }
+}
+.asset-orphan-details summary { cursor: pointer; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; user-select: none; }
+.asset-orphan-details summary b { font-size: 14px; color: var(--ink); }
+.asset-orphan-details summary span { font-size: 11.5px; color: var(--muted); }
+.asset-orphan-details[open] summary { margin-bottom: 12px; }
