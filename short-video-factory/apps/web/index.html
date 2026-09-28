@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>镜界 · 短剧工坊</title>
-<link rel="stylesheet" href="./style.css?v=18">
+<link rel="icon" type="image/svg+xml" href="./assets/jingjie-logo.svg">
+<link rel="stylesheet" href="./style.css?v=39">
 </head>
 <body>
 
@@ -12,12 +13,40 @@
 <section id="view-dashboard" class="view dashboard-shell">
   <aside class="dashboard-sidebar">
     <a class="dashboard-brand" href="#/" aria-label="镜界首页">
-      <span>JINGJIE</span><small>镜界 · 本地片场</small>
+      <svg class="brand-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" shape-rendering="geometricPrecision" role="img" aria-label="境界">
+        <title>境界 · 本地部署的数字媒体资产平台</title>
+        <defs>
+          <linearGradient id="jjg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#22D3EE"/>
+            <stop offset=".55" stop-color="#6366F1"/>
+            <stop offset="1" stop-color="#A855F7"/>
+          </linearGradient>
+          <linearGradient id="jjg2" x1="0" y1="1" x2="1" y2="0">
+            <stop offset="0" stop-color="#0EA5E9"/>
+            <stop offset="1" stop-color="#A855F7"/>
+          </linearGradient>
+        </defs>
+        <g fill="none" stroke="url(#jjg)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 46 L22 30 Q22 22 30 22 L46 22"/>
+          <path d="M82 22 L98 22 Q106 22 106 30 L106 46"/>
+          <path d="M106 82 L106 98 Q106 106 98 106 L82 106"/>
+          <path d="M46 106 L30 106 Q22 106 22 98 L22 82"/>
+        </g>
+        <circle cx="64" cy="64" r="14" fill="url(#jjg)"/>
+        <path d="M36 84 H92" stroke="url(#jjg2)" stroke-width="9" stroke-linecap="round"/>
+      </svg>
+      <span class="brand-text">
+        <b class="brand-name">镜界</b>
+        <small class="brand-sub">JINGJIE STUDIO</small>
+      </span>
     </a>
     <nav class="dashboard-nav" aria-label="首页导航">
       <a class="active" data-dashboard-view="home" href="#/"><b>⌂</b> 首页</a>
       <a data-dashboard-view="projects" href="#/projects"><b>▣</b> 我的项目</a>
-      <a href="#/new"><b>＋</b> 创建项目</a>
+      <a data-dashboard-view="tasks" href="#/tasks"><b>◔</b> 任务</a>
+      <a data-dashboard-view="new" href="#/new"><b>＋</b> 创建项目</a>
+      <a data-dashboard-view="oneclick" href="#/oneclick"><b>▶&#xFE0E;</b> 一键出片</a>
+      <a data-dashboard-view="chat" href="#/chat"><b>✦</b> 对话出片</a>
     </nav>
     <div class="sidebar-quote">用 AI，拍出更好的故事。<small>A SMALL STUDIO<br>FOR BIGGER STORIES</small></div>
   </aside>
@@ -166,6 +195,131 @@
   </div>
 </section>
 
+<!-- ============ 视图:对话出片 #/chat ============ -->
+<section id="view-chat" class="view hidden">
+  <header class="chat-head">
+    <a href="#/" class="hero-back">← 返回片库</a>
+    <div class="chat-head-row">
+      <div class="chat-head-text">
+        <div class="label">CHAT STUDIO</div>
+        <h1>对话出片</h1>
+        <p>把想法聊清楚，助理拆好完整分镜；你过目确认后，一键出片。</p>
+      </div>
+      <ol class="chat-steps" id="chat-steps">
+        <li class="done" data-step="1"><i>01</i><span>聊需求</span></li>
+        <li data-step="2"><i>02</i><span>看分镜</span></li>
+        <li data-step="3"><i>03</i><span>一键出片</span></li>
+      </ol>
+    </div>
+  </header>
+
+  <div class="chat-layout">
+    <section class="panel chat-panel">
+      <header class="chat-panel-head">
+        <div class="chat-who">
+          <span class="chat-avatar bot" aria-hidden="true">✦</span>
+          <div class="chat-who-text">
+            <b>制片助理</b>
+            <span id="chat-status"><i class="chat-dot"></i>在线 · 需求齐了自动拆解分镜</span>
+          </div>
+        </div>
+        <button id="chat-reset" class="btn btn-ghost btn-small">新对话</button>
+      </header>
+      <div id="chat-list" class="chat-list"></div>
+      <footer class="chat-composer">
+        <div class="chat-composer-box">
+          <textarea id="chat-input" rows="1" placeholder="说说你想拍的短剧：题材、主角、一个难忘的画面…"></textarea>
+          <button id="chat-send" class="btn btn-projector chat-send">发送</button>
+        </div>
+        <div class="chat-composer-hint">Enter 发送 · Shift+Enter 换行 · 风格/时长/画幅没说会按题材自动补默认</div>
+      </footer>
+    </section>
+
+    <aside class="chat-rail">
+      <div class="panel rail-card">
+        <div class="label">信息清单</div>
+        <div id="chat-checklist" class="chat-checklist"></div>
+      </div>
+      <div class="panel rail-card">
+        <div class="label">快捷开始</div>
+        <div class="rail-suggest">
+          <button data-suggest="雨夜便利店的悬疑短剧，店员在监控里看到另一个自己，30 秒竖屏">雨夜便利店悬疑 · 30s 竖屏</button>
+          <button data-suggest="猫咪咖啡馆的治愈日常，午后阳光和打盹的猫，30 秒竖屏">猫咪咖啡馆治愈日常 · 30s 竖屏</button>
+          <button data-suggest="雪夜末班公交的治愈短剧，女孩把围巾给流浪猫，20 秒横屏">雪夜末班公交 · 20s 横屏</button>
+        </div>
+      </div>
+      <div class="panel rail-card">
+        <div class="label">出片流程</div>
+        <ol class="rail-flow">
+          <li><i>1</i><div><b>聊需求</b><span>一两句话就够，信息不足才会追问</span></div></li>
+          <li><i>2</i><div><b>拆分镜</b><span>场次 / 角色 / 每镜结构化提示词，可预览</span></div></li>
+          <li><i>3</i><div><b>确认出片</b><span>点「一键出片」才落库，生成再手动开始</span></div></li>
+          <li><i>4</i><div><b>自动成片</b><span>定妆 → 首帧 → 逐镜 → 质检 → 自动拼接</span></div></li>
+        </ol>
+      </div>
+      <p class="rail-tip">聊到一半改主意直接说，方案会按最新一句重新拆解。</p>
+    </aside>
+  </div>
+</section>
+
+<!-- ============ 视图:任务中心 #/tasks ============ -->
+<section id="view-tasks" class="view hidden">
+  <header class="tasks-head">
+    <a href="#/" class="hero-back">← 返回片库</a>
+    <div class="tasks-head-row">
+      <div>
+        <div class="label">TASK CENTER</div>
+        <h1>任务中心</h1>
+        <p>所有项目的执行阶段、逐镜头进度与队列；在这里停止、取消或重试。</p>
+      </div>
+      <div class="tasks-head-actions">
+        <button id="tasks-pause-btn" class="btn btn-small">⏸ 暂停全部</button>
+        <button id="tasks-refresh-btn" class="btn btn-small">↻ 刷新</button>
+      </div>
+    </div>
+    <div id="tasks-summary" class="tasks-summary"></div>
+  </header>
+  <div id="tasks-list" class="tasks-list">
+    <div class="panel db-empty">加载任务中…</div>
+  </div>
+</section>
+
+<!-- ============ 视图:一键出片 #/oneclick ============ -->
+<section id="view-oneclick" class="view hidden">
+  <header class="oc-head">
+    <a href="#/" class="hero-back">← 返回片库</a>
+    <div class="label">ONE-CLICK STUDIO</div>
+    <h1>一键出片</h1>
+    <p>给一句话就行：说到的信息照做，没说的自动补默认，创建后直接开始生成，进度就在本页。</p>
+  </header>
+
+  <div id="oc-compose" class="panel oc-compose">
+    <textarea id="oc-input" rows="3" placeholder="说说要拍什么；也可以只上传材料，这里补充风格/时长/镜头数等要求"></textarea>
+    <div class="oc-material-row">
+      <button id="oc-file-btn" class="btn btn-small oc-file-btn">📎 上传材料（md / txt / docx）</button>
+      <input id="oc-file-input" type="file" hidden
+        accept=".md,.markdown,.txt,.json,.csv,.srt,.log,.docx,text/plain,text/markdown">
+      <span id="oc-material-chip" class="oc-material-chip hidden"></span>
+    </div>
+    <div class="oc-modes" id="oc-modes">
+      <button class="oc-mode active" data-mode="auto">⚡ 全自动 · 直接出成片</button>
+      <button class="oc-mode" data-mode="confirm">⏸ 素材后确认 · 我先看参考图</button>
+    </div>
+    <div id="oc-hints" class="oc-hints"></div>
+    <div class="oc-compose-foot">
+      <span class="oc-note" id="oc-note">全自动：规划 → 定妆 → 首帧 → 渲染 → 质检 → 自动拼接，中途不停。</span>
+      <button id="oc-start-btn" class="btn btn-projector oc-start">✦ 开始生成</button>
+    </div>
+    <div class="oc-suggest">
+      <button data-suggest="雨夜便利店的悬疑短剧，店员在监控里看到另一个自己，30 秒竖屏">雨夜便利店悬疑 · 30s 竖屏</button>
+      <button data-suggest="雪夜末班公交的治愈短剧，女孩把围巾给流浪猫，20 秒横屏，每镜5秒">雪夜末班公交 · 20s 横屏 · 每镜5秒</button>
+      <button data-suggest="猫咪咖啡馆的治愈日常，午后阳光和打盹的猫，共三个镜头，竖屏">猫咪咖啡馆 · 3 镜竖屏</button>
+    </div>
+  </div>
+
+  <div id="oc-progress" class="oc-progress hidden"></div>
+</section>
+
 <!-- ============ 视图三:工作室 #/studio/{id}?step=xxx ============ -->
 <section id="view-studio" class="view hidden">
   <div id="studio-root" class="studio-root">
@@ -194,6 +348,6 @@
   </div>
 </div>
 
-<script src="./app.js?v=16"></script>
+<script src="./app.js?v=30"></script>
 </body>
 </html>

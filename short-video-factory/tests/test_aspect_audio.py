@@ -145,7 +145,7 @@ def test_unify_export_clips_reencodes_mismatched(tmp_path, monkeypatch):
     clips = [{"shot_id": "s0", "storage_key": "p/a/ok.mp4"},
              {"shot_id": "s1", "storage_key": "p/a/vertical.mp4"}]
     sizes = {"p/a/ok.mp4": (1920, 1080), "p/a/vertical.mp4": (1024, 1792)}
-    monkeypatch.setattr("svf.apps.api.app._probe_video_size",
+    monkeypatch.setattr("svf.workers.compose.probe_video_size",
                         lambda ffprobe, path: sizes[path])
     calls: list = []
 
@@ -154,7 +154,7 @@ def test_unify_export_clips_reencodes_mismatched(tmp_path, monkeypatch):
         Path(cmd[-1]).write_bytes(b"reencoded")
         return types.SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr("svf.apps.api.app.subprocess.run", fake_run)
+    monkeypatch.setattr("svf.workers.compose.subprocess.run", fake_run)
     out = _unify_export_clips("/usr/bin/ffmpeg", project, clips, tmp_path,
                               path_for=lambda key: key)
     assert "_path" not in out[0]                       # 符合目标的不动

@@ -17,13 +17,16 @@ if "svf" not in sys.modules:
     pkg.__path__ = [str(ROOT)]
     sys.modules["svf"] = pkg
 
+import os  # noqa: E402
+
 import uvicorn  # noqa: E402
 
 from svf.apps.api.app import build_default  # noqa: E402
 
 
 def main() -> None:
-    uvicorn.run(build_default(), host="0.0.0.0", port=8600)
+    uvicorn.run(build_default(), host="0.0.0.0",
+                port=int(os.environ.get("SVF_PORT", "8600")))
 
 
 if __name__ == "__main__":

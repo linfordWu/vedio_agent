@@ -39,6 +39,7 @@ TABLES = {
 class Store:
     def __init__(self, path: str | Path):
         self._lock = threading.RLock()
+        self._closed = False
         self._db = sqlite3.connect(str(path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
@@ -50,11 +51,18 @@ class Store:
         self._db.execute("CREATE INDEX IF NOT EXISTS idx_events_seq ON events(json_extract(doc,'$.seq'))")
         self._db.commit()
 
+    def _check_open(self) -> None:
+        """关闭后的访问直接报错:进程退出阶段后台线程仍可能碰库,
+        访问已关闭的 sqlite 连接会直接段错误(而不是抛异常)。"""
+        if self._closed:
+            raise RuntimeError("store is closed")
+
     # ------------------------------------------------------------ generics --
     def _put(self, table: str, obj) -> None:
         pk, _ = TABLES[table]
         doc = obj.model_dump_json()
         with self._lock:
+            self._check_open()
             self._db.execute(f"INSERT OR REPLACE INTO {table} ({pk}, doc) VALUES (?, ?)",
                              (getattr(obj, pk), doc))
             self._db.commit()
@@ -62,12 +70,14 @@ class Store:
     def _get(self, table: str, key: str):
         pk, model = TABLES[table]
         with self._lock:
+            self._check_open()
             row = self._db.execute(f"SELECT doc FROM {table} WHERE {pk}=?", (key,)).fetchone()
         return model.model_validate_json(row["doc"]) if row else None
 
     def _all(self, table: str, **where) -> list:
         pk, model = TABLES[table]
         with self._lock:
+            self._check_open()
             rows = self._db.execute(f"SELECT doc FROM {table}").fetchall()
         out = [model.model_validate_json(r["doc"]) for r in rows]
         for k, v in where.items():
@@ -80,6 +90,7 @@ class Store:
         """Run state change + event + outbox in a single transaction."""
         from ..state_machine.machine import transition
         with self._lock:
+            self._check_open()
             run = self._get("runs", run_id)
             if run is None:
                 raise KeyError(run_id)
@@ -106,6 +117,7 @@ class Store:
 
     def append_event(self, event: Event) -> Event:
         with self._lock:
+            self._check_open()
             event.seq = self._next_seq_locked()
             self._db.execute("INSERT OR REPLACE INTO events (event_id, doc) VALUES (?, ?)",
                              (event.event_id, event.model_dump_json()))
@@ -116,6 +128,7 @@ class Store:
 
     def events_since(self, project_id: str, seq: int = 0, limit: int = 500) -> list[Event]:
         with self._lock:
+            self._check_open()
             rows = self._db.execute("SELECT doc FROM events").fetchall()
         out = [Event.model_validate_json(r["doc"]) for r in rows]
         return sorted([e for e in out if e.project_id == project_id and e.seq > seq],
@@ -123,11 +136,13 @@ class Store:
 
     def unpublish_pending(self) -> list[Event]:
         with self._lock:
+            self._check_open()
             rows = self._db.execute("SELECT doc FROM outbox WHERE published=0").fetchall()
         return [Event.model_validate_json(r["doc"]) for r in rows]
 
     def mark_published(self, event_id: str) -> None:
         with self._lock:
+            self._check_open()
             self._db.execute("UPDATE outbox SET published=1 WHERE outbox_id=?",
                              (f"out_{event_id}",))
             self._db.commit()
@@ -145,9 +160,14 @@ class Store:
     def delete(self, table: str, key: str) -> bool:
         pk, _ = TABLES[table]
         with self._lock:
+            self._check_open()
             cur = self._db.execute(f"DELETE FROM {table} WHERE {pk}=?", (key,))
             self._db.commit()
         return cur.rowcount > 0
 
     def close(self) -> None:
-        self._db.close()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._db.close()

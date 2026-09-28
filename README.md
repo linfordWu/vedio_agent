@@ -14,6 +14,28 @@
 
 **在 Windows 上使用 `setup.bat` 即可轻松安装. 已在 ComfyUI v0.36.0 上完成安装与实际生成的确认.** 只要准备好兼容的 ComfyUI 和所需模型，即可一次性完成 Python 选择，兼容性检查，节点配置与预转换. 不会自动下载模型.
 
+---
+
+## 短剧工厂（short-video-factory）
+
+本仓库同时包含一个 Web 短剧生产应用：`short-video-factory/`（对话出片 / 一键出片 / 任务中心，FastAPI + 零构建前端 + ComfyUI H3 渲染）。**从零跑起来只要三步**：
+
+1. 安装依赖并配置密钥（密钥不入库，仓库里只有占位符 `.env.example`）：
+   ```bash
+   cd short-video-factory
+   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+   cp .env.example .env        # 编辑 .env，填入 DEEPSEEK_API_KEY
+   ```
+   没有 DeepSeek key 也能跑：把 `TEXT_MODEL_PROVIDER` 设为 `ollama` 或 `vllm`（本地模型，无需密钥）。
+2. 按你的部署改依赖服务地址（写在 `.env` 或环境变量里）：
+   - `COMFY_BASE`（默认 `http://localhost:8188`）：MiniMax H3 视频渲染；
+   - `QWEN_IMAGE_URL`（默认 `http://172.19.0.3:8601`）：Qwen-Image 2.1 图片服务（定妆/场景/首帧）；
+   - `VISION_MODEL_*`（默认 ollama `gemma3:4b`）：质检用的视觉模型。
+3. 启动：`.venv/bin/python -m apps.api` → http://localhost:8600
+
+完整功能说明、接口清单与**全部环境变量表**见
+[short-video-factory/README.md](short-video-factory/README.md)。
+
 ### 安装前需要了解的事项
 
 | 项目 | 要点 |

@@ -34,6 +34,13 @@ const state = {
   qkSelected: new Set(),
   qkAssets: [],
   qkLoaded: false,
+  // 对话出片(对话 -> 结构化分镜预览 -> 一键出片)
+  chat: { messages: [], busy: false, proposal: null, plan: null,
+          planBusy: false, planError: '', producing: false, planToken: 0,
+          planShown: false, checklist: {} },
+  producePending: false,   // 项目生产线程在跑(定妆/首帧/排队),SSE 事件驱动
+  ocMode: 'auto',          // 一键出片模式: auto=全自动 / confirm=素材后确认
+  ocMaterial: null,        // 一键出片上传的材料:{name, text|docxB64, chars}
   // SSE
   es: null,
   lastSeq: 0,
@@ -66,6 +73,14 @@ const ISSUE_TYPE_MAP = {
 
 const RUN_STATES_BUSY = ['QUEUED', 'RENDERING', 'SCORING'];
 const RUN_STATES_PRE = ['PLANNED', 'ASSET_READY', 'PROMPT_READY'];
+// 生产编排事件:驱动「生成准备中」状态与工作室静默刷新
+const PRODUCE_EVENTS = ['quick.started', 'casting.started', 'casting.completed',
+                        'first_frame.started', 'first_frame.completed',
+                        'quick.orchestrated', 'quick.failed',
+                        'produce.stop_requested', 'produce.stopped',
+                        'produce.resumed', 'produce.awaiting_confirm',
+                        'produce.confirmed',
+                        'run.cancel_requested', 'run.cancelled'];
 
 /* ---------- 工具 ---------- */
 const $ = (sel) => document.querySelector(sel);
@@ -200,8 +215,14 @@ function parseHash() {
   const parts = path.split('/').filter(Boolean);
   if (parts[0] === 'projects') return { view: 'projects' };
   if (parts[0] === 'new') return { view: 'new' };
+  if (parts[0] === 'chat') return { view: 'chat' };
+  if (parts[0] === 'tasks') return { view: 'tasks' };
+  if (parts[0] === 'oneclick') {
+    return { view: 'oneclick', project: params.get('project') || '' };
+  }
   if (parts[0] === 'studio' && parts[1]) {
-    return { view: 'studio', projectId: decodeURIComponent(parts[1]), step: params.get('step') || 'script' };
+    return { view: 'studio', projectId: decodeURIComponent(parts[1]),
+             step: params.get('step') || 'script', from: params.get('from') || '' };
   }
   return { view: 'dashboard' };
 }
@@ -217,10 +238,30 @@ async function render() {
   clearStepTimer();
   const r = parseHash();
   state.route = r;
-  ['view-dashboard', 'view-new', 'view-studio'].forEach((id) => $('#' + id).classList.add('hidden'));
+  ['view-dashboard', 'view-new', 'view-studio', 'view-chat', 'view-tasks',
+   'view-oneclick'].forEach((id) => $('#' + id).classList.add('hidden'));
+  // 侧栏一级导航激活态
+  const navMap = { dashboard: 'home', projects: 'projects', new: 'new',
+                   chat: 'chat', tasks: 'tasks', oneclick: 'oneclick' };
+  const activeNav = navMap[r.view] || '';
+  $$('[data-dashboard-view]').forEach((a) => {
+    a.classList.toggle('active', a.dataset.dashboardView === activeNav);
+  });
   if (r.view === 'new') {
     closeSSE();
     $('#view-new').classList.remove('hidden');
+  } else if (r.view === 'chat') {
+    closeSSE();
+    $('#view-chat').classList.remove('hidden');
+    renderChatView();
+  } else if (r.view === 'tasks') {
+    closeSSE();
+    $('#view-tasks').classList.remove('hidden');
+    await renderTasksView();
+  } else if (r.view === 'oneclick') {
+    closeSSE();
+    $('#view-oneclick').classList.remove('hidden');
+    await renderOneclickView();
   } else if (r.view === 'studio') {
     $('#view-studio').classList.remove('hidden');
     await enterStudio(r.projectId, r.step);
@@ -345,7 +386,10 @@ function renderProjectCards() {
         '<div class="proj-progress">' + segs + '</div>' +
       '</div>' +
       '<div class="proj-card-foot"><span>' + esc(stats) + '</span>' +
-      '<button class="btn btn-ghost btn-small db-del-btn" data-id="' + esc(id) + '" data-title="' + esc(p.title || id) + '">删除</button></div>' +
+      '<div class="proj-foot-actions">' +
+        (p.stoppable ? '<button class="btn btn-small db-stop-btn" data-id="' + esc(id) + '" data-title="' + esc(p.title || id) + '">■ 停止</button>' : '') +
+        '<button class="btn btn-ghost btn-small db-del-btn" data-id="' + esc(id) + '" data-title="' + esc(p.title || id) + '">删除</button>' +
+      '</div></div>' +
     '</article>';
   }).join('');
   grid.querySelectorAll('.proj-card-main').forEach((el) => {
@@ -353,6 +397,12 @@ function renderProjectCards() {
   });
   grid.querySelectorAll('.db-del-btn').forEach((btn) => {
     btn.addEventListener('click', () => deleteProject(btn.dataset.id, btn.dataset.title));
+  });
+  grid.querySelectorAll('.db-stop-btn').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      stopProject(btn.dataset.id, btn.dataset.title, btn);
+    });
   });
   grid.querySelectorAll('.proj-play').forEach((btn) => {
     btn.addEventListener('click', (e) => {
@@ -388,6 +438,24 @@ async function deleteProject(id, title) {
     renderDashboard();
   } catch (err) {
     toast('删除失败:' + err.message, 'err');
+  }
+}
+
+// 停止项目的全部执行(服务端行为,关掉浏览器也生效)
+async function stopProject(id, title, btn) {
+  const name = title || '当前项目';
+  if (!confirm('停止「' + name + '」的全部执行?\n\n· 定妆/首帧会在当前这张图完成后停止\n· 在途镜头会取消(已验收的镜头与素材保留)\n· 之后可随时重新「开始生成」')) return;
+  const original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '停止中…'; }
+  try {
+    await api('/projects/' + encodeURIComponent(id) + '/stop',
+              { method: 'POST', json: {} });
+    toast('已发送停止指令', 'ok');
+    if (state.route && state.route.view === 'studio') await refreshQuiet();
+    else await render();
+  } catch (err) {
+    toast('停止失败:' + err.message, 'err');
+    if (btn) { btn.disabled = false; btn.textContent = original; }
   }
 }
 
@@ -524,6 +592,1029 @@ $('#qk-btn').addEventListener('click', async () => {
   }
 });
 
+/* ---------- 视图:对话出片 ---------- */
+const CHAT_GREETING = '你好，我是制片助理。先聊聊你想拍的短剧吧——我会顺着问几个关键问题（主角、冲突、风格…），帮你想清楚；如果你一句话就说全了，也可以直接开拍。';
+
+// 信息清单:对话引导的进度可视化(与后端 checklist 对齐)
+const CHAT_CHECKLIST_FIELDS = [
+  ['topic', '题材'], ['lead', '主角'], ['conflict', '冲突/反转'],
+  ['ending', '结尾'], ['style', '风格'], ['duration', '时长'], ['aspect', '画幅'],
+];
+
+function mergeChatChecklist(next) {
+  if (!next || typeof next !== 'object') return;
+  if (!state.chat.checklist) state.chat.checklist = {};
+  CHAT_CHECKLIST_FIELDS.forEach(([key]) => {
+    const val = String(next[key] || '').trim();
+    if (val) state.chat.checklist[key] = val;
+  });
+  drawChatChecklist();
+}
+
+function drawChatChecklist() {
+  const el = $('#chat-checklist');
+  if (!el) return;
+  const data = state.chat.checklist || {};
+  const missing = [];
+  const rows = CHAT_CHECKLIST_FIELDS.map(([key, label]) => {
+    const val = String(data[key] || '').trim();
+    if (!val) missing.push(label);
+    return '<div class="cc-row ' + (val ? 'done' : 'pending') + '">' +
+      '<i>' + (val ? '✓' : '○') + '</i>' +
+      '<span class="cc-label">' + label + '</span>' +
+      '<span class="cc-value">' + (val ? esc(val) : '待聊') + '</span></div>';
+  }).join('');
+  const skip = state.chat.plan || state.chat.planBusy
+    ? '' : '<button id="chat-skip-btn" class="btn btn-ghost btn-small cc-skip">⏭ 不想聊了，直接开拍</button>';
+  el.innerHTML = rows +
+    (missing.length ? '<div class="cc-missing">还差：' + esc(missing.join('、')) + '</div>' : '') +
+    skip;
+  const btn = $('#chat-skip-btn');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      const input = $('#chat-input');
+      input.value = '都可以，你定吧，直接开始';
+      sendChatMessage();
+    });
+  }
+}
+
+function renderChatView() {
+  if (!state.chat.messages.length) {
+    state.chat.messages = [{ role: 'assistant', content: CHAT_GREETING }];
+  }
+  drawChatMessages();
+  drawChatChecklist();
+  autoGrowChatInput($('#chat-input'));
+  $('#chat-input').focus();
+}
+
+// 输入框随内容长高(上限约 6 行)
+function autoGrowChatInput(el) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 148) + 'px';
+}
+
+function chatThinkingRow(text, who) {
+  return '<div class="chat-row bot">' +
+    '<span class="chat-avatar bot">✦</span>' +
+    '<div class="chat-body"><div class="chat-name">' + esc(who || '制片助理') + '</div>' +
+    '<div class="chat-bubble chat-typing">' +
+      '<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>' +
+      '<span class="chat-typing-text">' + esc(text) + '</span>' +
+    '</div></div></div>';
+}
+
+// 顶部三步进度:聊需求 → 看分镜 → 一键出片
+function updateChatSteps() {
+  const steps = $$('#chat-steps li');
+  if (!steps.length) return;
+  const hasPlan = !!state.chat.plan;
+  steps[0].className = 'done';
+  steps[1].className = hasPlan ? 'done' : (state.chat.planBusy ? 'on' : '');
+  steps[2].className = hasPlan ? (state.chat.producing ? 'done' : 'on') : '';
+}
+
+function updateChatStatus() {
+  const el = $('#chat-status');
+  if (!el) return;
+  let text = '在线 · 需求齐了自动拆解分镜';
+  if (state.chat.busy) text = '正在理解你的需求…';
+  else if (state.chat.planBusy) text = '导演正在拆解分镜，约需 1 分钟…';
+  else if (state.chat.producing) text = '正在出片，去工作室看进度…';
+  else if (state.chat.plan) text = '分镜已就绪 · 确认后点「一键出片」';
+  el.innerHTML = '<i class="chat-dot"></i>' + esc(text);
+}
+
+function drawChatMessages() {
+  const list = $('#chat-list');
+  let html = state.chat.messages.map((m) => {
+    const mine = m.role === 'user';
+    return '<div class="chat-row ' + (mine ? 'user' : 'bot') + '">' +
+      '<span class="chat-avatar ' + (mine ? 'me' : 'bot') + '">' +
+        (mine ? '我' : '✦') + '</span>' +
+      '<div class="chat-body">' +
+        '<div class="chat-name">' + (mine ? '你' : '制片助理') + '</div>' +
+        '<div class="chat-bubble">' + esc(m.content) + '</div>' +
+      '</div></div>';
+  }).join('');
+  if (state.chat.busy) html += chatThinkingRow('正在想…');
+  if (state.chat.planBusy) {
+    html += chatThinkingRow('正在把需求拆成完整分镜（场次/角色/每镜结构化提示词）…',
+                            '导演');
+  }
+  if (state.chat.plan) html += renderChatPlan(state.chat.plan);
+  if (state.chat.planError) html += renderChatPlanError();
+  list.innerHTML = html;
+  bindChatPlanEvents();
+  updateChatSteps();
+  updateChatStatus();
+  const send = $('#chat-send');
+  if (send) send.disabled = !!state.chat.busy;
+  // 方案首次出现时定位到分镜开头,便于从头过目;其他情况保持在最新消息
+  if (state.chat.plan && !state.chat.planShown) {
+    state.chat.planShown = true;
+    const planEl = list.querySelector('.chat-plan');
+    if (planEl) list.scrollTop = Math.max(0, planEl.offsetTop - list.offsetTop - 8);
+  } else {
+    list.scrollTop = list.scrollHeight;
+  }
+}
+
+/* ---- 方案卡:预览结构化分镜,点「一键出片」才落库生成 ---- */
+function chatPlanStats(plan) {
+  const scenes = plan.scenes || [];
+  let shots = 0, duration = 0;
+  scenes.forEach((sc) => (sc.shots || []).forEach((sh) => {
+    shots += 1;
+    duration += Number(sh.duration_s) || 0;
+  }));
+  return { scenes: scenes.length, shots, duration };
+}
+
+function renderChatPlan(plan) {
+  const st = chatPlanStats(plan);
+  const chips = [
+    plan.style || '',
+    (plan.duration_target_s || st.duration) + 's',
+    plan.aspect_ratio || '16:9',
+    st.scenes + ' 场 · ' + st.shots + ' 镜',
+  ].filter(Boolean).map((t) => '<span class="chat-chip">' + esc(t) + '</span>').join('');
+  const noteChip = plan.constraint_note
+    ? '<span class="chat-chip accent">✓ ' + esc(plan.constraint_note) + '</span>' : '';
+  let shotNo = 0;
+  const scenes = (plan.scenes || []).map((sc, si) => {
+    const shots = (sc.shots || []).map((sh) => {
+      shotNo += 1;
+      return renderPlanShot(sh, shotNo);
+    }).join('');
+    return '<div class="cps-scene">' +
+      '<div class="cps-scene-head">' +
+        '<i class="cps-scene-no">' + String(si + 1).padStart(2, '0') + '</i>' +
+        '<b>' + esc(sc.title || '场景') + '</b>' +
+        '<span>' + (sc.shots || []).length + ' 镜</span></div>' +
+      (shots || '<p class="empty-hint">本场没有可用镜头</p>') + '</div>';
+  }).join('');
+  const producing = state.chat.producing;
+  return '<div class="chat-plan">' +
+    '<div class="chat-plan-head">' +
+      '<div><div class="label">STORYBOARD READY</div>' +
+      '<h3>' + esc(plan.title || '出片方案') + '</h3></div>' +
+      '<div class="chat-plan-meta">' + noteChip + chips + '</div>' +
+    '</div>' +
+    (plan.brief ? '<p class="chat-plan-brief">' + esc(plan.brief) + '</p>' : '') +
+    '<div class="chat-plan-scenes">' + scenes + '</div>' +
+    '<div class="chat-plan-actions">' +
+      '<span class="chat-plan-hint">确认分镜后开始:定妆参考图 → 镜头首帧 → 逐镜生成 → 质检,可在工作室随时改词重生成。</span>' +
+      '<button id="chat-replan" class="btn btn-ghost btn-small"' + (producing ? ' disabled' : '') + '>重新拆解</button>' +
+      '<button id="chat-produce" class="btn btn-projector"' + (producing ? ' disabled' : '') + '>' +
+        (producing ? '正在开机…' : '✦ 一键出片') + '</button>' +
+    '</div></div>';
+}
+
+function planRow(label, value) {
+  const text = String(value == null ? '' : value).trim();
+  if (!text) return '';
+  return '<div class="cps-row"><span>' + esc(label) + '</span><p>' + esc(text) + '</p></div>';
+}
+
+function renderPlanShot(shot, n) {
+  const motion = shot.motion_contract || {};
+  const cam = shot.camera || {};
+  const camText = [cam.shot, cam.movement].filter(Boolean).join(' · ');
+  const objects = (shot.object_states || []).map((o) => {
+    const count = o.count ? '(' + o.count + ')' : '';
+    const state = (o.start_state || o.end_state)
+      ? '：' + (o.start_state || '保持现状') + ' → ' + (o.end_state || '保持') : '';
+    return (o.name || '') + count + state;
+  }).filter(Boolean).join('；');
+  const beats = shot.beats || {};
+  const beatText = [
+    (beats.already_happened || []).length ? '已演不重演: ' + beats.already_happened.join('；') : '',
+    (beats.this_clip_only || []).length ? '本镜独占: ' + beats.this_clip_only.join('；') : '',
+    (beats.reserved_for_later || []).length ? '后续预留: ' + beats.reserved_for_later.join('；') : '',
+  ].filter(Boolean).join(' | ');
+  const acceptance = shot.acceptance || {};
+  const acceptText = [
+    (acceptance.required || []).length ? '必达: ' + acceptance.required.join('；') : '',
+    (acceptance.forbidden || []).length ? '禁止: ' + acceptance.forbidden.join('；') : '',
+  ].filter(Boolean).join(' | ');
+  const details = [
+    planRow('剧情节拍', shot.narrative_beat),
+    planRow('主动作', motion.primary_motion),
+    planRow('次运动', motion.secondary_motion),
+    planRow('开始状态', motion.start_state),
+    planRow('结束状态', motion.end_state),
+    planRow('运镜', motion.camera_motion || camText),
+    planRow('光线与调色', shot.lighting_palette),
+    planRow('关键物体', objects),
+    planRow('节拍', beatText),
+    planRow('验收', acceptText),
+    planRow('内心意图', shot.felt_intent),
+  ].filter(Boolean).join('');
+  return '<div class="cps-shot">' +
+    '<div class="cps-head"><span class="cps-no">SHOT ' + String(n).padStart(2, '0') + '</span>' +
+      '<span class="cps-dur">' + esc(shot.duration_s || 5) + 's</span>' +
+      (shot.dialogue ? '<span class="cps-tag">台词</span>' : '') +
+      (camText ? '<span class="cps-tag">' + esc(camText) + '</span>' : '') +
+    '</div>' +
+    '<div class="cps-action">' + esc(shot.action || '') + '</div>' +
+    (shot.dialogue ? '<div class="cps-dialogue">“' + esc(shot.dialogue) + '”</div>' : '') +
+    (details ? '<details class="cps-more"><summary>结构化提示词</summary>' +
+      '<div class="cps-grid">' + details + '</div></details>' : '') +
+  '</div>';
+}
+
+function renderChatPlanError() {
+  return '<div class="chat-plan chat-plan-error">' +
+    '<div class="chat-plan-head"><div><div class="label">PLAN FAILED</div>' +
+    '<h3>分镜拆解失败</h3></div></div>' +
+    '<p class="chat-plan-brief">' + esc(state.chat.planError) + '</p>' +
+    '<div class="chat-plan-actions">' +
+      '<span class="chat-plan-hint">可以重试拆解,或直接走标准一键成片(后台自动规划)。</span>' +
+      '<button id="chat-legacy" class="btn btn-ghost btn-small">标准一键成片</button>' +
+      '<button id="chat-replan" class="btn btn-projector">重试拆解</button>' +
+    '</div></div>';
+}
+
+function bindChatPlanEvents() {
+  const produce = $('#chat-produce');
+  if (produce) produce.addEventListener('click', chatProduceFromPlan);
+  const replan = $('#chat-replan');
+  if (replan) replan.addEventListener('click', () => requestChatPlan(state.chat.proposal, true));
+  const legacy = $('#chat-legacy');
+  if (legacy) legacy.addEventListener('click', () => chatQuickFallback(state.chat.proposal));
+}
+
+async function sendChatMessage() {
+  const input = $('#chat-input');
+  const text = input.value.trim();
+  if (!text || state.chat.busy) return;
+  input.value = '';
+  autoGrowChatInput(input);
+  state.chat.messages.push({ role: 'user', content: text });
+  state.chat.busy = true;
+  drawChatMessages();
+  try {
+    const res = await api('/assistant/chat', {
+      method: 'POST', json: { messages: state.chat.messages },
+    });
+    state.chat.messages.push({ role: 'assistant', content: res.reply || '…' });
+    mergeChatChecklist(res.checklist);      // 引导进度:信息清单
+    if (res.proposal && res.proposal.brief) {
+      state.chat.proposal = res.proposal;
+      state.chat.plan = null;
+      state.chat.planShown = false;
+      state.chat.planError = '';
+      requestChatPlan(res.proposal);   // 需求齐全:立刻拆结构化分镜供预览
+    }
+  } catch (err) {
+    state.chat.messages.push({ role: 'assistant',
+      content: '制片助理暂时不可用:' + err.message });
+  } finally {
+    state.chat.busy = false;
+    drawChatMessages();
+    $('#chat-input').focus();
+  }
+}
+
+async function requestChatPlan(proposal, force) {
+  if (!proposal || !proposal.brief) return;
+  const token = ++state.chat.planToken;
+  state.chat.planBusy = true;
+  state.chat.planError = '';
+  state.chat.producing = false;
+  if (force) { state.chat.plan = null; state.chat.planShown = false; }
+  drawChatMessages();
+  try {
+    const res = await api('/assistant/plan', {
+      method: 'POST',
+      json: { messages: state.chat.messages, proposal },
+    });
+    if (token !== state.chat.planToken) return;      // 已有更新的拆解请求
+    state.chat.plan = res.plan || null;
+    if (!state.chat.plan) state.chat.planError = '方案为空,请重试';
+  } catch (err) {
+    if (token !== state.chat.planToken) return;
+    state.chat.planError = err.message;
+  } finally {
+    if (token === state.chat.planToken) {
+      state.chat.planBusy = false;
+      drawChatMessages();
+    }
+  }
+}
+
+async function chatProduceFromPlan() {
+  const plan = state.chat.plan;
+  const proposal = state.chat.proposal;
+  if (!plan || !proposal || state.chat.producing) return;
+  state.chat.producing = true;
+  drawChatMessages();
+  const body = {
+    title: proposal.title || plan.title || proposal.brief.slice(0, 15),
+    brief: proposal.brief,
+    style: proposal.style || '',
+    duration_target_s: Number(proposal.duration_target_s) || 60,
+    aspect_ratio: proposal.aspect_ratio || '16:9',
+    mode: 'text',
+    plan,
+  };
+  try {
+    const res = await api('/projects/quick', { method: 'POST', json: body });
+    const pid = res.project_id || res.id;
+    if (!pid) throw new Error('响应中未找到 project_id');
+    toast('分镜已填入工作室:请过目/修改,确认后点「开始生成」', 'ok');
+    state.chat.messages = [];
+    state.chat.plan = null;
+    state.chat.planShown = false;
+    state.chat.proposal = null;
+    go('#/studio/' + encodeURIComponent(pid) + '?step=storyboard&from=chat');
+  } catch (err) {
+    toast('出片失败:' + err.message, 'err');
+    state.chat.producing = false;
+    drawChatMessages();
+  }
+}
+
+async function chatQuickFallback(proposal) {
+  // 结构化拆解失败时的兜底:标准一键成片(后台编剧→角色→导演链路)
+  if (!proposal || !proposal.brief || state.chat.producing) return;
+  state.chat.producing = true;
+  drawChatMessages();
+  const body = {
+    title: proposal.title || proposal.brief.slice(0, 15),
+    brief: proposal.brief,
+    duration_target_s: Number(proposal.duration_target_s) || 60,
+    aspect_ratio: proposal.aspect_ratio || '16:9',
+    mode: 'text',
+  };
+  if (proposal.style) body.style = proposal.style;
+  try {
+    const res = await api('/projects/quick', { method: 'POST', json: body });
+    const pid = res.project_id || res.id;
+    if (!pid) throw new Error('响应中未找到 project_id');
+    toast('已按标准链路开机,去工作室看进度', 'ok');
+    state.chat.messages = [];
+    state.chat.plan = null;
+    state.chat.planShown = false;
+    state.chat.proposal = null;
+    state.chat.planError = '';
+    go('#/studio/' + encodeURIComponent(pid) + '?step=storyboard');
+  } catch (err) {
+    toast('出片失败:' + err.message, 'err');
+    state.chat.producing = false;
+    drawChatMessages();
+  }
+}
+
+$('#chat-send').addEventListener('click', sendChatMessage);
+$('#chat-input').addEventListener('input', (e) => autoGrowChatInput(e.target));
+$('#chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendChatMessage();
+  }
+});
+// 快捷开始:点击填入输入框,可改完再发
+$$('.rail-suggest button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const input = $('#chat-input');
+    input.value = btn.dataset.suggest || '';
+    autoGrowChatInput(input);
+    input.focus();
+  });
+});
+$('#chat-reset').addEventListener('click', () => {
+  state.chat.planToken += 1;      // 作废在途拆解结果
+  state.chat.messages = [];
+  state.chat.busy = false;
+  state.chat.planBusy = false;
+  state.chat.producing = false;
+  state.chat.plan = null;
+  state.chat.planShown = false;
+  state.chat.planError = '';
+  state.chat.proposal = null;
+  state.chat.checklist = {};
+  renderChatView();
+});
+
+/* ---------- 视图:任务中心 #/tasks ---------- */
+const TASK_STATE = {
+  PLANNED: ['st-idle', '待开始'], ASSET_READY: ['st-idle', '准备素材'],
+  PROMPT_READY: ['st-idle', '提示词就绪'], QUEUED: ['st-busy', '排队中'],
+  RENDERING: ['st-busy', '渲染中'], GENERATED: ['st-busy', '已生成'],
+  NORMALIZING: ['st-busy', '规范化'], SCORING: ['st-busy', '质检中'],
+  REPAIRING: ['st-busy', '修复中'], RETRY_WAIT: ['st-idle', '等待重试'],
+  HUMAN_REVIEW: ['st-review', '待审核'], ACCEPTED: ['st-done', '已完成'],
+  CANCEL_REQUESTED: ['st-idle', '取消中'], CANCELLED: ['st-fail', '已取消'],
+  FAILED: ['st-fail', '失败'],
+};
+const TASK_BUSY_STAGES = ['planning', 'preparing', 'casting', 'first_frame',
+                          'rendering', 'scoring'];
+
+function taskStateInfo(stateName) {
+  return TASK_STATE[stateName] || ['st-idle', stateName || '-'];
+}
+
+async function renderTasksView() {
+  await refreshTasks();
+  state.stepTimer = setInterval(refreshTasks, 5000);   // 任务页 5 秒轮询
+}
+
+async function refreshTasks() {
+  try {
+    state.tasks = await api('/tasks');
+  } catch (err) {
+    const list = $('#tasks-list');
+    if (list) {
+      list.innerHTML = '<div class="panel db-empty">任务加载失败：' +
+        esc(err.message) + '</div>';
+    }
+    return;
+  }
+  drawTasks();
+}
+
+function drawTasks() {
+  const data = state.tasks || { summary: {}, projects: [] };
+  const sum = data.summary || {};
+  const paused = !!sum.paused;
+  const pauseBtn = $('#tasks-pause-btn');
+  if (pauseBtn) {
+    pauseBtn.textContent = paused ? '▶ 恢复全部' : '⏸ 暂停全部';
+    pauseBtn.classList.toggle('btn-projector', paused);
+  }
+  const summaryEl = $('#tasks-summary');
+  if (summaryEl) {
+    const stats = [
+      ['进行中', sum.active || 0, 'on'],
+      ['排队 / 等待', sum.waiting || 0, ''],
+      ['待确认', sum.awaiting || 0, 'review'],
+      ['待人工审核', sum.review || 0, 'review'],
+      ['已完成', sum.completed || 0, 'done'],
+      ['待生成 / 空白', sum.idle || 0, ''],
+    ];
+    summaryEl.innerHTML =
+      (paused ? '<div class="tasks-paused">⏸ 引擎已暂停：在途任务不再前进' +
+        '<button id="tasks-resume-inline" class="btn btn-small">▶ 恢复</button></div>' : '') +
+      '<div class="tasks-stats">' + stats.map(([label, n, cls]) =>
+        '<div class="tasks-stat ' + cls + '"><b>' + n + '</b><span>' + label +
+        '</span></div>').join('') + '</div>';
+  }
+  const list = $('#tasks-list');
+  if (!list) return;
+  const projects = (data.projects || []).filter(
+    (p) => (p.counts && p.counts.shots) || p.stoppable);
+  if (!projects.length) {
+    list.innerHTML = '<div class="panel db-empty">没有进行中的任务。' +
+      '去「对话出片」或「创建项目」开始一部短剧吧。</div>';
+    return;
+  }
+  list.innerHTML = projects.map(renderTaskProject).join('');
+  bindTaskEvents();
+}
+
+function renderTaskProject(p) {
+  const info = taskStateInfo(p.stage);
+  const c = p.counts || {};
+  const pct = Math.round((p.progress || 0) * 100);
+  const busy = TASK_BUSY_STAGES.includes(p.stage);
+  const currentLine = p.current
+    ? '<div class="task-current">' + (busy ? '<span class="spinner"></span>' : '') +
+      '<span class="task-current-text">' + esc(p.current.summary || p.stage_label) +
+      '</span><em>#' + esc(p.current.shot_no || '-') + ' · 已耗时 ' +
+      fmtElapsed((p.current.elapsed_s || 0) * 1000) + '</em></div>'
+    : (p.last_event
+      ? '<div class="task-current idle"><span class="task-current-text">' +
+        esc(p.last_event.summary || p.last_event.type) + '</span></div>'
+      : '');
+  const runs = (p.runs || []).filter(
+    (r) => r.cancellable || r.state === 'FAILED' || r.state === 'CANCELLED');
+  const runsHtml = runs.map((r) => {
+    const rInfo = taskStateInfo(r.state);
+    return '<div class="task-run">' +
+      '<span class="task-run-shot">SHOT ' + String(r.shot_no || '?').padStart(2, '0') + '</span>' +
+      '<span class="status-badge ' + rInfo[0] + '">' + esc(rInfo[1]) + '</span>' +
+      '<span class="task-run-meta">seed ' + esc(r.seed) +
+        (r.repair_count ? ' · 修复 ' + r.repair_count : '') +
+        (r.verdict ? ' · ' + esc(r.verdict) : '') +
+        ' · ' + fmtElapsed((r.elapsed_s || 0) * 1000) + '</span>' +
+      '<span class="task-run-summary">' + esc((r.summary || '').slice(0, 60)) + '</span>' +
+      '<span class="task-run-actions">' +
+        (r.retryable ? '<button class="btn btn-small task-retry-btn" data-run="' +
+          esc(r.run_id) + '">重试</button>' : '') +
+        (r.cancellable ? '<button class="btn btn-small btn-danger task-cancel-btn" data-run="' +
+          esc(r.run_id) + '">取消</button>' : '') +
+      '</span></div>';
+  }).join('');
+  const stats = [
+    '镜头 ' + (c.accepted || 0) + '/' + (c.shots || 0),
+    '进行 ' + (c.active || 0),
+    '排队 ' + (c.queued || 0),
+    (c.review ? '待审核 ' + c.review : ''),
+    (c.failed ? '失败 ' + c.failed : ''),
+    '成片 ' + (c.exports || 0),
+  ].filter(Boolean).join(' · ');
+  return '<article class="panel task-card" data-id="' + esc(p.project_id) + '">' +
+    '<div class="task-card-head">' +
+      '<div class="task-card-title">' +
+        '<span class="status-badge ' + info[0] + '">' + esc(p.stage_label) + '</span>' +
+        '<h3>' + esc(p.title || '(无标题)') + '</h3>' +
+        '<span class="task-card-meta">' +
+          esc([p.style, p.duration_target_s ? p.duration_target_s + 's' : '',
+               p.aspect_ratio].filter(Boolean).join(' / ')) + '</span>' +
+      '</div>' +
+      '<div class="task-card-actions">' +
+        (p.awaiting_confirm ? '<button class="btn btn-projector btn-small task-confirm-btn" data-id="' +
+          esc(p.project_id) + '">✅ 确认生成镜头</button>' : '') +
+        '<button class="btn btn-small task-open-btn" data-id="' + esc(p.project_id) +
+          '">打开工作室</button>' +
+        (p.stoppable ? '<button class="btn btn-small btn-danger task-stop-btn" data-id="' +
+          esc(p.project_id) + '" data-title="' + esc(p.title || '') +
+          '">■ 停止</button>' : '') +
+      '</div>' +
+    '</div>' +
+    '<div class="task-progress"><div class="task-progress-bar" style="width:' +
+      pct + '%"></div></div>' +
+    '<div class="task-card-stats">' + esc(stats) + '</div>' +
+    currentLine +
+    (runs.length ? '<details class="task-runs"><summary>任务明细（' + runs.length +
+      '）</summary>' + runsHtml + '</details>' : '') +
+  '</article>';
+}
+
+function bindTaskEvents() {
+  $$('.task-open-btn').forEach((btn) => btn.addEventListener('click', () => {
+    go('#/studio/' + encodeURIComponent(btn.dataset.id) + '?step=storyboard');
+  }));
+  $$('.task-stop-btn').forEach((btn) => btn.addEventListener('click', () =>
+    tasksStopProject(btn.dataset.id, btn.dataset.title, btn)));
+  $$('.task-confirm-btn').forEach((btn) => btn.addEventListener('click', () =>
+    tasksConfirmProject(btn.dataset.id, btn)));
+  $$('.task-cancel-btn').forEach((btn) => btn.addEventListener('click', () =>
+    tasksRunCommand(btn.dataset.run, 'cancel', btn)));
+  $$('.task-retry-btn').forEach((btn) => btn.addEventListener('click', () =>
+    tasksRunCommand(btn.dataset.run, 'retry', btn)));
+  const resume = $('#tasks-resume-inline');
+  if (resume) resume.addEventListener('click', () => tasksTogglePause(resume));
+}
+
+async function tasksStopProject(id, title, btn) {
+  if (!confirm('停止「' + (title || '当前项目') + '」的全部执行?\n\n' +
+      '· 定妆/首帧会在当前这张图完成后停止\n' +
+      '· 在途镜头会取消(已验收的镜头与素材保留)\n' +
+      '· 之后可随时重新「开始生成」')) return;
+  btn.disabled = true;
+  btn.textContent = '停止中…';
+  try {
+    await api('/projects/' + encodeURIComponent(id) + '/stop',
+              { method: 'POST', json: {} });
+    toast('已发送停止指令', 'ok');
+    await refreshCurrentView();
+  } catch (err) {
+    toast('停止失败:' + err.message, 'err');
+    btn.disabled = false;
+    btn.textContent = '■ 停止';
+  }
+}
+
+async function tasksConfirmProject(pid, btn) {
+  btn.disabled = true;
+  btn.textContent = '正在开始渲染…';
+  try {
+    await api('/projects/' + encodeURIComponent(pid) + '/confirm',
+              { method: 'POST', json: {} });
+    toast('已确认：开始逐镜渲染，完成后自动拼接', 'ok');
+    await refreshCurrentView();
+  } catch (err) {
+    toast('确认失败:' + err.message, 'err');
+    btn.disabled = false;
+    btn.textContent = '✅ 确认生成镜头';
+  }
+}
+
+// 动作完成后刷新「当前所在页面」的数据
+async function refreshCurrentView() {
+  const v = state.route && state.route.view;
+  if (v === 'tasks') await refreshTasks();
+  else if (v === 'oneclick' && state.oneclick) await ocRefresh(state.oneclick.projectId);
+  else if (v === 'studio') await refreshQuiet();
+  else await render();
+}
+
+async function tasksRunCommand(runId, action, btn) {
+  const label = action === 'retry' ? '重试' : '取消';
+  if (action === 'cancel' && !confirm('取消这个镜头任务?已生成的 TAKE 会保留。')) return;
+  btn.disabled = true;
+  try {
+    await api('/runs/' + encodeURIComponent(runId) + '/commands',
+              { method: 'POST', json: { action, command_id: newCommandId() } });
+    toast('已提交' + label + '指令', 'ok');
+    await refreshTasks();
+  } catch (err) {
+    toast(label + '失败:' + err.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+async function tasksTogglePause(btn) {
+  const paused = !!(state.tasks && state.tasks.summary && state.tasks.summary.paused);
+  if (btn) btn.disabled = true;
+  try {
+    await api(paused ? '/engine/resume' : '/engine/pause',
+              { method: 'POST', json: {} });
+    toast(paused ? '已恢复执行' : '已暂停执行', 'ok');
+    await refreshTasks();
+  } catch (err) {
+    toast('操作失败:' + err.message, 'err');
+    if (btn) btn.disabled = false;
+  }
+}
+
+$('#tasks-refresh-btn').addEventListener('click', refreshTasks);
+$('#tasks-pause-btn').addEventListener('click', (e) => tasksTogglePause(e.currentTarget));
+
+/* ---------- 视图:一键出片 #/oneclick ---------- */
+const OC_STEPS = [
+  ['plan', '规划分镜'], ['cast', '定妆参考图'], ['frame', '镜头首帧'],
+  ['render', '逐镜渲染'], ['judge', '质检'], ['compose', '拼接成片'],
+];
+const OC_STAGE_PCT = { planning: 8, preparing: 26, casting: 26, first_frame: 42,
+                       queued: 48, rendering: 48, scoring: 72, review: 72,
+                       awaiting_confirm: 65, done: 100, planned: 10, empty: 3 };
+
+function ocCnNumber(raw) {
+  const D = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  raw = String(raw || '').trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  if (raw.includes('十')) {
+    const [l, r] = raw.split('十');
+    return (l ? (D[l] || 1) : 1) * 10 + (r ? (D[r] || 0) : 0);
+  }
+  let v = 0;
+  for (const ch of raw) { if (!(ch in D)) return null; v = v * 10 + D[ch]; }
+  return v || null;
+}
+
+// 与后端 extract_oneclick_params 对齐的即时预判(仅用于输入提示)
+function ocExtract(text) {
+  const out = {};
+  const mDur = text.match(/([0-9]{1,4}|[一二两三四五六七八九十]{1,3})\s*(?:秒|s\b)/i);
+  if (mDur) {
+    const n = ocCnNumber(mDur[1]);
+    if (n >= 10 && n <= 600) out.duration = n;
+  }
+  const aspects = [['9:16', ['9:16', '9比16', '九比十六', '竖屏', '竖版', '竖向']],
+                   ['1:1', ['1:1', '1比1', '一比一', '方形', '方屏']],
+                   ['16:9', ['16:9', '16比9', '十六比九', '横屏', '横版', '横向']]];
+  for (const [a, hs] of aspects) {
+    if (hs.some((h) => text.includes(h))) { out.aspect = a; break; }
+  }
+  const mShots = text.match(/([0-9]{1,3}|[一二两三四五六七八九十]{1,3})\s*(?:个|段)?\s*(?:镜头|分镜|镜)/);
+  if (mShots) {
+    const n = ocCnNumber(mShots[1]);
+    if (n) out.shots = n;
+  }
+  const mSec = text.match(/每(?:个)?(?:镜头|分镜|镜|视频)\s*(?:约|大概|各)?\s*([0-9]{1,2})\s*秒/);
+  if (mSec) out.shotSeconds = Number(mSec[1]);
+  return out;
+}
+
+function ocUpdateHints() {
+  const el = $('#oc-hints');
+  const input = $('#oc-input');
+  if (!el || !input) return;
+  const parsed = ocExtract(input.value.trim());
+  const chips = [];
+  if (parsed.duration) chips.push(parsed.duration + ' 秒');
+  if (parsed.aspect) chips.push(parsed.aspect);
+  if (parsed.shots) chips.push(parsed.shots + ' 个镜头');
+  if (parsed.shotSeconds) chips.push('每镜 ' + parsed.shotSeconds + ' 秒');
+  el.innerHTML = chips.length
+    ? '<span class="oc-chip dim">识别到</span>' + chips.map((t) =>
+        '<span class="oc-chip">' + esc(t) + '</span>').join('')
+    : '<span class="oc-chip dim">未指定项将自动补默认（30 秒 · 9:16）</span>';
+}
+
+function ocUpdateMode() {
+  $$('#oc-modes .oc-mode').forEach((b) => {
+    b.classList.toggle('active', b.dataset.mode === state.ocMode);
+  });
+  const note = $('#oc-note');
+  if (note) {
+    note.textContent = state.ocMode === 'confirm'
+      ? '素材后确认：定妆/场景图/首帧生成完先停下，你确认后再逐镜渲染并自动拼接。'
+      : '全自动：规划 → 定妆 → 首帧 → 渲染 → 质检 → 自动拼接，中途不停。';
+  }
+}
+
+/* ---- 材料上传(md/txt/docx):材料会被逐段覆盖生成 ---- */
+const OC_TEXT_EXTS = ['md', 'markdown', 'txt', 'json', 'csv', 'srt', 'log'];
+const OC_MATERIAL_MAX_CHARS = 24000;
+const OC_DOCX_MAX_BYTES = 8 * 1024 * 1024;
+
+function ocRenderMaterialChip() {
+  const chip = $('#oc-material-chip');
+  if (!chip) return;
+  const mat = state.ocMaterial;
+  if (!mat) {
+    chip.classList.add('hidden');
+    chip.innerHTML = '';
+    return;
+  }
+  const size = mat.chars
+    ? (mat.chars >= 1000 ? (mat.chars / 1000).toFixed(1) + 'k 字' : mat.chars + ' 字')
+    : 'docx';
+  chip.classList.remove('hidden');
+  chip.innerHTML = '<span class="oc-chip">📄 ' + esc(mat.name) + ' · ' + esc(size) +
+    '</span><button id="oc-material-remove" class="oc-material-x" title="移除材料">×</button>';
+  chip.querySelector('#oc-material-remove').addEventListener('click', () => {
+    state.ocMaterial = null;
+    ocRenderMaterialChip();
+  });
+}
+
+function ocSetMaterialFile(file) {
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  if (ext === 'docx') {
+    if (file.size > OC_DOCX_MAX_BYTES) {
+      toast('docx 太大（限 8MB）', 'err');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const bytes = new Uint8Array(reader.result);
+      let binary = '';
+      const step = 0x8000;
+      for (let i = 0; i < bytes.length; i += step) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
+      }
+      state.ocMaterial = { name: file.name, docxB64: btoa(binary), chars: 0 };
+      ocRenderMaterialChip();
+      toast('已读取 docx：' + file.name, 'ok');
+    };
+    reader.onerror = () => toast('文件读取失败', 'err');
+    reader.readAsArrayBuffer(file);
+    return;
+  }
+  if (OC_TEXT_EXTS.includes(ext)) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result || '').slice(0, OC_MATERIAL_MAX_CHARS);
+      state.ocMaterial = { name: file.name, text, chars: text.length };
+      ocRenderMaterialChip();
+      toast('已读取材料：' + file.name + '（' + text.length + ' 字）', 'ok');
+    };
+    reader.onerror = () => toast('文件读取失败', 'err');
+    reader.readAsText(file);
+    return;
+  }
+  toast('暂支持 md / txt / docx；' + (ext || '该格式') + ' 请先转成文本', 'err');
+}
+
+async function renderOneclickView() {
+  const pid = (state.route && state.route.project) || '';
+  const compose = $('#oc-compose');
+  const progress = $('#oc-progress');
+  if (pid) {
+    state.oneclick = { projectId: pid };
+    compose.classList.add('hidden');
+    progress.classList.remove('hidden');
+    await ocRefresh(pid);
+    if (state.route.view === 'oneclick') {
+      state.stepTimer = setInterval(() => ocRefresh(pid), 3000);
+    }
+  } else {
+    state.oneclick = null;
+    progress.classList.add('hidden');
+    compose.classList.remove('hidden');
+    ocUpdateMode();
+    ocRenderMaterialChip();
+    ocUpdateHints();
+    autoGrowChatInput($('#oc-input'));
+    $('#oc-input').focus();
+  }
+}
+
+async function ocRefresh(pid) {
+  let data;
+  try {
+    data = await api('/tasks');
+  } catch (err) {
+    return;
+  }
+  if (!state.oneclick || state.oneclick.projectId !== pid) return;
+  const proj = (data.projects || []).find((p) => p.project_id === pid);
+  let assets = [];
+  try {
+    const res = await api('/assets?project_id=' + encodeURIComponent(pid));
+    assets = res.assets || res || [];
+  } catch (err) { /* 忽略素材查询失败 */ }
+  ocDraw(pid, proj, assets);
+}
+
+function ocDraw(pid, proj, assets) {
+  const el = $('#oc-progress');
+  if (!el) return;
+  if (!proj) {
+    el.innerHTML = '<div class="panel db-empty">项目不存在或已删除。' +
+      '<a href="#/oneclick" class="btn btn-small" style="margin-left:12px">再拍一部</a></div>';
+    return;
+  }
+  const c = proj.counts || {};
+  const stage = proj.stage;
+  const doneSet = new Set();
+  if (c.shots > 0 || ['queued', 'rendering', 'scoring', 'review', 'done'].includes(stage)) {
+    doneSet.add('plan');
+  }
+  if (['first_frame', 'queued', 'rendering', 'scoring', 'review',
+       'awaiting_confirm', 'done'].includes(stage)) {
+    doneSet.add('cast');
+    doneSet.add('frame');
+  }
+  if (['rendering', 'scoring', 'review', 'done'].includes(stage)) doneSet.add('render');
+  if (['scoring', 'review', 'done'].includes(stage)) doneSet.add('judge');
+  if (stage === 'done' && c.exports > 0) doneSet.add('compose');
+  const activeName = ({ planning: 'plan', preparing: 'frame', casting: 'cast',
+                        first_frame: 'frame', queued: 'render', rendering: 'render',
+                        scoring: 'judge', review: 'judge' })[stage] || '';
+  const pct = (stage === 'rendering' && c.shots)
+    ? Math.round(48 + 24 * (c.accepted || 0) / c.shots)
+    : (OC_STAGE_PCT[stage] || 0);
+  const steps = OC_STEPS.map(([key, label]) => {
+    const cls = doneSet.has(key) ? 'done' : (key === activeName ? 'on' : '');
+    return '<li class="' + cls + '"><i>' + (doneSet.has(key) ? '✓' : '') +
+      '</i><span>' + label + '</span></li>';
+  }).join('');
+  const shotsHtml = (proj.runs || []).slice(-24).map((r) => {
+    const info = taskStateInfo(r.state);
+    return '<span class="oc-shot ' + info[0] + '" title="' + esc(info[1]) + '">#' +
+      esc(r.shot_no || '?') + '</span>';
+  }).join('');
+  const current = proj.current
+    ? '<div class="oc-current">' + (activeName ? '<span class="spinner"></span>' : '') +
+      '<span class="oc-current-text">' + esc(proj.current.summary || proj.stage_label) +
+      '</span><em>#' + esc(proj.current.shot_no || '-') + ' · 已耗时 ' +
+      fmtElapsed((proj.current.elapsed_s || 0) * 1000) + '</em></div>'
+    : (proj.last_event
+      ? '<div class="oc-current"><span class="oc-current-text">' +
+        esc(proj.last_event.summary || proj.last_event.type) + '</span></div>'
+      : '');
+  const exportVideo = [...assets].reverse().find(
+    (a) => a.source === 'derived' && isVideoAsset(a));
+  let resultHtml = '';
+  if (proj.awaiting_confirm) {
+    const imgs = assets.filter((a) => a.media_type === 'image').slice(-12);
+    resultHtml = '<div class="panel oc-card oc-confirm">' +
+      '<div class="oc-card-head"><div><div class="label">STEP 2 / 3</div>' +
+      '<h2>素材已就绪 · 确认后开始渲染镜头</h2>' +
+      '<div class="oc-meta">定妆 / 场景参考图 / 镜头首帧已生成；确认后逐镜渲染、质检，' +
+      '并自动拼接成片，无需再次确认。</div></div>' +
+      '<div class="oc-card-actions"><button id="oc-confirm-btn" ' +
+        'class="btn btn-projector" data-id="' + esc(pid) + '">✅ 确认生成镜头</button>' +
+      '</div></div>' +
+      (imgs.length
+        ? '<div class="oc-confirm-grid">' + imgs.map((a) =>
+            '<a href="/assets/' + encodeURIComponent(a.asset_id) +
+            '/file" target="_blank" rel="noopener" title="' +
+            esc((a.metadata && a.metadata.original_filename) || '') + '">' +
+            '<img src="/assets/' + encodeURIComponent(a.asset_id) +
+            '/file" loading="lazy" alt=""></a>').join('') + '</div>'
+        : '') +
+    '</div>';
+  } else if (exportVideo) {
+    resultHtml = '<div class="panel oc-card oc-result">' +
+      '<div class="oc-card-head"><div><div class="label">FINAL CUT</div>' +
+      '<h2>完整成片已就绪</h2><div class="oc-meta">' +
+      esc((exportVideo.metadata && exportVideo.metadata.original_filename) || '') +
+      '</div></div><div class="oc-card-actions">' +
+      '<a class="btn btn-small" href="/assets/' + encodeURIComponent(exportVideo.asset_id) +
+        '/file" download>下载</a>' +
+      '<button class="btn btn-projector btn-small oc-studio-btn" data-id="' +
+        esc(pid) + '">打开工作室</button></div></div>' +
+      '<video class="oc-video" src="/assets/' + encodeURIComponent(exportVideo.asset_id) +
+        '/file" controls preload="metadata"></video></div>';
+  } else if (stage === 'done') {
+    resultHtml = '<div class="panel oc-card"><div class="oc-empty">' +
+      '镜头已全部完成，成片正在拼接（或已降级为清单），稍后刷新看看。</div></div>';
+  }
+  el.innerHTML = '<div class="panel oc-card">' +
+    '<div class="oc-card-head"><div>' +
+      '<div class="label">' + esc(proj.stage_label || '进行中') + '</div>' +
+      '<h2>' + esc(proj.title || '(无标题)') + '</h2>' +
+      '<div class="oc-meta">' + esc([proj.style,
+        proj.duration_target_s ? proj.duration_target_s + 's' : '',
+        proj.aspect_ratio,
+        proj.material_name ? '材料：' + proj.material_name : ''
+      ].filter(Boolean).join(' / ')) + '</div></div>' +
+      '<div class="oc-card-actions">' +
+      (proj.stoppable ? '<button id="oc-stop-btn" class="btn btn-small btn-danger" ' +
+        'data-id="' + esc(pid) + '" data-title="' + esc(proj.title || '') +
+        '">■ 停止</button>' : '') +
+      '<button class="btn btn-small oc-studio-btn" data-id="' + esc(pid) +
+        '">打开工作室</button></div></div>' +
+    '<ol class="oc-steps">' + steps + '</ol>' +
+    '<div class="oc-bar"><div class="oc-bar-fill" style="width:' + pct + '%"></div></div>' +
+    '<div class="oc-card-stats">' + esc('镜头 ' + (c.accepted || 0) + '/' + (c.shots || 0) +
+      ' · 进行 ' + (c.active || 0) + ' · 排队 ' + (c.queued || 0) +
+      (c.review ? ' · 待审核 ' + c.review : '') +
+      (c.failed ? ' · 失败 ' + c.failed : '')) + '</div>' +
+    current +
+    (shotsHtml ? '<div class="oc-shots">' + shotsHtml + '</div>' : '') +
+  '</div>' + resultHtml;
+  const stopBtn = $('#oc-stop-btn');
+  if (stopBtn) stopBtn.addEventListener('click', () =>
+    tasksStopProject(pid, stopBtn.dataset.title, stopBtn));
+  const confirmBtn = $('#oc-confirm-btn');
+  if (confirmBtn) confirmBtn.addEventListener('click', () =>
+    ocConfirmProject(pid, confirmBtn));
+  $$('.oc-studio-btn').forEach((btn) => btn.addEventListener('click', () => {
+    go('#/studio/' + encodeURIComponent(btn.dataset.id) + '?step=storyboard');
+  }));
+}
+
+async function ocConfirmProject(pid, btn) {
+  btn.disabled = true;
+  btn.textContent = '正在开始渲染…';
+  try {
+    await api('/projects/' + encodeURIComponent(pid) + '/confirm',
+              { method: 'POST', json: {} });
+    toast('已确认：开始逐镜渲染，完成后自动拼接', 'ok');
+    await ocRefresh(pid);
+  } catch (err) {
+    toast('确认失败:' + err.message, 'err');
+    btn.disabled = false;
+    btn.textContent = '✅ 确认生成镜头';
+  }
+}
+
+async function ocStart() {
+  const input = $('#oc-input');
+  const text = (input.value || '').trim();
+  const material = state.ocMaterial;
+  if (!text && !material) {
+    toast('先描述一句要拍什么，或上传材料（md/txt/docx）', 'err');
+    input.focus();
+    return;
+  }
+  const btn = $('#oc-start-btn');
+  btn.disabled = true;
+  btn.textContent = '正在创建…';
+  const body = { text, confirm_after_assets: state.ocMode === 'confirm' };
+  if (material) {
+    body.material_name = material.name;
+    if (material.docxB64) body.material_docx_b64 = material.docxB64;
+    else body.material_text = material.text || '';
+  }
+  try {
+    const res = await api('/projects/oneclick', { method: 'POST', json: body });
+    if (!res.project_id) throw new Error('响应中未找到 project_id');
+    const modeNote = state.ocMode === 'confirm' ? '，素材完成后停下等你确认' : '';
+    toast(material
+      ? '已开始：材料逐段覆盖生成' + modeNote
+      : '已开始：规划 → 定妆 → 首帧 → 渲染 → 自动拼接' + modeNote, 'ok');
+    go('#/oneclick?project=' + encodeURIComponent(res.project_id));
+  } catch (err) {
+    toast('创建失败:' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✦ 开始生成';
+  }
+}
+
+$('#oc-start-btn').addEventListener('click', ocStart);
+$('#oc-file-btn').addEventListener('click', () => $('#oc-file-input').click());
+$('#oc-file-input').addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (file) ocSetMaterialFile(file);
+  e.target.value = '';
+});
+$$('#oc-modes .oc-mode').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    state.ocMode = btn.dataset.mode || 'auto';
+    ocUpdateMode();
+  });
+});
+$('#oc-input').addEventListener('input', () => {
+  autoGrowChatInput($('#oc-input'));
+  ocUpdateHints();
+});
+$('#oc-input').addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); ocStart(); }
+});
+$$('.oc-suggest button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const input = $('#oc-input');
+    input.value = btn.dataset.suggest || '';
+    autoGrowChatInput(input);
+    ocUpdateHints();
+    input.focus();
+  });
+});
+
 /* ---------- 视图三:工作室骨架 ---------- */
 function getRuns() {
   return (state.bundle && state.bundle.runs) || [];
@@ -596,6 +1687,7 @@ async function enterStudio(pid, step) {
   state.sbDrafts = {};
   state.sbExpandRun = null;
   state.editSelectedShotId = null;
+  state.producePending = false;   // SSE 回放会按事件重建真实状态
   const root = $('#studio-root');
   root.innerHTML = '<div class="studio-loading"><span class="spinner"></span> 正在开机片场…</div>';
   try {
@@ -613,7 +1705,7 @@ async function enterStudio(pid, step) {
 async function refreshBundle() {
   const pid = state.currentProjectId;
   const [bundle, chars, assets] = await Promise.all([
-    api('/projects/' + encodeURIComponent(pid)),
+    api('/projects/' + encodeURIComponent(pid) + '?prompts=1'),
     api('/projects/' + encodeURIComponent(pid) + '/characters').catch(() => ({ characters: [] })),
     api('/assets?project_id=' + encodeURIComponent(pid)).catch(() => ({ assets: [] })),
   ]);
@@ -654,6 +1746,9 @@ function renderStudioShell() {
   const pid = state.currentProjectId;
   const ratio = proj.aspect_ratio || proj.ratio || '-';
   const stepIdx = STEPS.findIndex((s) => s.key === state.step);
+  const activeRuns = getRuns().filter((r) =>
+    !['ACCEPTED', 'CANCELLED', 'FAILED'].includes(runState(r))).length;
+  const stoppable = activeRuns > 0 || state.producePending;
 
   root.innerHTML =
     '<div class="studio-grid">' +
@@ -684,7 +1779,10 @@ function renderStudioShell() {
       '<header class="studio-topbar">' +
         '<div><div class="label studio-stage-label">STAGE ' + String(stepIdx + 1).padStart(2, '0') + '</div>' +
         '<div class="studio-stage-title">' + STEPS[stepIdx].label + '</div></div>' +
-        '<button id="studio-refresh-btn" class="btn btn-small">↻ 刷新</button>' +
+        '<div class="studio-topbar-actions">' +
+          (stoppable ? '<button id="studio-stop-btn" class="btn btn-small btn-danger">■ 停止生成</button>' : '') +
+          '<button id="studio-refresh-btn" class="btn btn-small">↻ 刷新</button>' +
+        '</div>' +
       '</header>' +
       '<div id="step-content" class="step-content"></div>' +
     '</div>' +
@@ -695,6 +1793,11 @@ function renderStudioShell() {
       go('#/studio/' + encodeURIComponent(pid) + '?step=' + btn.dataset.step));
   });
   $('#studio-refresh-btn').addEventListener('click', refreshQuiet);
+  const studioStopBtn = $('#studio-stop-btn');
+  if (studioStopBtn) {
+    studioStopBtn.addEventListener('click', () =>
+      stopProject(pid, proj.title, studioStopBtn));
+  }
   $('#sse-chip').addEventListener('click', () => $('#sse-drawer').classList.toggle('hidden'));
   updateSSEIndicator();
   renderStepContent();
@@ -1106,20 +2209,82 @@ function renderStoryboardStep(el) {
   });
   if (ungrouped.shots.length) groups.push(ungrouped);
 
-  el.innerHTML = renderManualShotComposer(scenes) + groups.map((g) => {
-    const sorted = g.shots.slice().sort(shotOrder);
-    return '<div class="sb-scene-block">' +
-      '<div class="sb-scene-head"><h3>' + esc(g.title) + '</h3><span>' + sorted.length + ' 个镜头</span></div>' +
-      sorted.map((shot, i) => renderShotCard(shot, i)).join('') +
-    '</div>';
-  }).join('');
+  const pendingProduce = shots.filter((s) =>
+    !getRuns().some((r) => r.shot_id === shotId(s)));
+  const fromChat = !!(state.route && state.route.from === 'chat');
+
+  el.innerHTML = renderManualShotComposer(scenes) +
+    renderProduceBar(pendingProduce, shots, fromChat) +
+    groups.map((g) => {
+      const sorted = g.shots.slice().sort(shotOrder);
+      return '<div class="sb-scene-block">' +
+        '<div class="sb-scene-head"><h3>' + esc(g.title) + '</h3><span>' + sorted.length + ' 个镜头</span></div>' +
+        sorted.map((shot, i) => renderShotCard(shot, i)).join('') +
+      '</div>';
+    }).join('');
 
   bindShotCardEvents(el);
   bindManualShotComposer(el);
+  const produceBtn = el.querySelector('#sb-produce-btn');
+  if (produceBtn) produceBtn.addEventListener('click', () => startProjectProduce(produceBtn));
+  const sbStopBtn = el.querySelector('#sb-stop-btn');
+  if (sbStopBtn) {
+    const proj = (state.bundle && state.bundle.project) || {};
+    sbStopBtn.addEventListener('click', () =>
+      stopProject(state.currentProjectId, proj.title, sbStopBtn));
+  }
 
-  // 有 run 处于生成中时每 5 秒轮询
+  // 有 run 生成中 / 生产准备中(定妆/首帧)时每 5 秒轮询
   const busy = getRuns().some((r) => RUN_STATES_BUSY.includes(runState(r)));
-  if (busy) state.stepTimer = setInterval(refreshQuiet, 5000);
+  if (busy || state.producePending) state.stepTimer = setInterval(refreshQuiet, 5000);
+}
+
+/* 分镜就绪条:确认后手动点「开始生成」,不自动开工;验收完自动拼成片 */
+function renderProduceBar(pending, shots, fromChat) {
+  const label = fromChat ? '对话方案已填入分镜:' : '分镜已就绪:';
+  const hasExport = (state.assets || []).some(
+    (a) => a.source === 'derived' && isVideoAsset(a));
+  const status = pending.length
+    ? '其中 ' + pending.length + ' 个待生成'
+    : (hasExport ? '完整成片已就绪,可在「剪辑」步查看/下载' : '已全部提交生成');
+  const activeRuns = getRuns().filter((r) =>
+    !['ACCEPTED', 'CANCELLED', 'FAILED'].includes(runState(r))).length;
+  const stoppable = state.producePending || activeRuns > 0;
+  const preparing = state.producePending
+    ? ' · <span class="spinner"></span> 正在准备(定妆参考图 → 镜头首帧 → 逐镜排队)…'
+    : '';
+  return '<div class="panel sb-produce-bar">' +
+    '<div class="sb-produce-info"><b>' + label + '</b>' +
+      shots.length + ' 个镜头,' + status + preparing +
+      '<span class="empty-hint">过目或修改后点右侧「开始生成」,才开始 定妆 → 首帧 → 逐镜渲染;全部镜头验收后会自动拼接成完整成片。</span></div>' +
+    '<div class="sb-produce-actions">' +
+      (stoppable ? '<button id="sb-stop-btn" class="btn btn-danger">■ 停止</button>' : '') +
+      '<button id="sb-produce-btn" class="btn btn-projector"' +
+        (pending.length ? '' : ' disabled') + '>▶ 开始生成全部镜头</button>' +
+    '</div>' +
+  '</div>';
+}
+
+async function startProjectProduce(btn) {
+  if (Object.keys(state.sbDrafts || {}).length) {
+    toast('有未保存的镜头修改:先点镜头卡片里的「保存」再开始生成', 'err');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '正在排队…';
+  state.producePending = true;
+  try {
+    await api('/projects/' + encodeURIComponent(state.currentProjectId) + '/produce', {
+      method: 'POST', json: {},
+    });
+    toast('已开始:定妆 → 首帧 → 逐镜生成', 'ok');
+    await refreshQuiet();
+  } catch (err) {
+    state.producePending = false;
+    toast('开始生成失败:' + err.message, 'err');
+    btn.disabled = false;
+    btn.textContent = '▶ 开始生成全部镜头';
+  }
 }
 
 function renderManualShotComposer(scenes) {
@@ -1224,6 +2389,19 @@ function renderShotCard(shot, idx) {
     '<span class="shot-dirty-hint sb-dirty-hint hidden" data-shot-id="' + esc(sid) + '">● 未保存</span>' +
   '</div>';
 
+  // 渲染提示词:已生成优先显示实际下发文本(run.prompt_spec),否则显示预览
+  const latest = runs.length ? runs[runs.length - 1] : null;
+  const promptText = (latest && latest.prompt_spec) || shot.prompt_preview || '';
+  if (promptText) {
+    html += '<details class="shot-prompt"><summary>渲染提示词' +
+      (latest && latest.prompt_spec ? '(实际下发)' : '(预览,点「保存」后生效)') +
+      '</summary><pre class="shot-prompt-text" data-shot-id="' + esc(sid) + '">' +
+      esc(promptText) + '</pre>' +
+      '<div class="shot-prompt-actions">' +
+        '<button class="btn btn-ghost btn-small shot-prompt-copy" data-shot-id="' + esc(sid) + '">复制提示词</button>' +
+      '</div></details>';
+  }
+
   // TAKE 版本条
   if (runs.length) {
     html += '<div class="take-strip"><div class="take-strip-label">TAKES · ' + runs.length + '</div>';
@@ -1247,8 +2425,11 @@ function renderShotCard(shot, idx) {
         (RUN_STATES_BUSY.includes(st) ? '<span class="take-elapsed" data-elapsed-run="' + esc(rid) + '">计时…</span>' : '') +
         (firstCid ? '<span class="chip">' + (expanded ? '收起' : '播放') + '</span>' : '') +
         '<span style="flex:1"></span>' +
-        '<button class="btn btn-small take-review-btn" data-decision="accept" data-run-id="' + esc(rid) + '">接受</button>' +
-        '<button class="btn btn-small btn-danger take-review-btn" data-decision="reject" data-run-id="' + esc(rid) + '">拒绝</button>' +
+        (st === 'HUMAN_REVIEW'
+          ? '<span class="take-review-hint">需人工确认</span>' +
+            '<button class="btn btn-small take-review-btn" data-decision="accept" data-run-id="' + esc(rid) + '">接受</button>' +
+            '<button class="btn btn-small btn-danger take-review-btn" data-decision="reject" data-run-id="' + esc(rid) + '">拒绝</button>'
+          : '') +
       '</div>';
       if (expanded && firstCid) {
         html += '<div class="take-video"><video src="/assets/' + encodeURIComponent(firstCid) + '/file" controls autoplay preload="metadata"></video></div>';
@@ -1270,6 +2451,20 @@ function bindShotCardEvents(el) {
   });
   el.querySelectorAll('.shot-dur-input').forEach((inp) => {
     inp.addEventListener('input', () => markShotDirty(inp.dataset.shotId, el));
+  });
+  // 复制渲染提示词
+  el.querySelectorAll('.shot-prompt-copy').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const pre = el.querySelector('.shot-prompt-text[data-shot-id="' +
+        CSS.escape(btn.dataset.shotId) + '"]');
+      if (!pre) return;
+      try {
+        await navigator.clipboard.writeText(pre.textContent);
+        toast('提示词已复制', 'ok');
+      } catch (err) {
+        toast('复制失败,可手动选择文本复制', 'err');
+      }
+    });
   });
   // 保存
   el.querySelectorAll('.sb-save-btn').forEach((btn) => {
@@ -1603,9 +2798,26 @@ function handleSSEEvent(evt) {
   if (state.events.length > 300) state.events = state.events.slice(-200);
   appendSSECard(evt);
 
-  // 生成相关事件 → 静默刷新当前步
+  // 生成相关事件 → 静默刷新当前步;生产过程(定妆/首帧/排队)标记在途状态
   const t = evt.type || evt.event_type || '';
-  if (['step.completed', 'run.failed', 'quality.evaluated', 'artifact.created'].includes(t)) {
+  if (PRODUCE_EVENTS.includes(t)) {
+    if (t === 'quick.started' || t === 'casting.started'
+        || t === 'first_frame.started' || t === 'produce.resumed'
+        || t === 'produce.confirmed') {
+      state.producePending = true;
+    }
+    if (t === 'quick.orchestrated' || t === 'quick.failed'
+        || t === 'produce.stopped' || t === 'produce.stop_requested'
+        || t === 'produce.awaiting_confirm'
+        || t === 'run.cancelled') state.producePending = false;
+    refreshQuiet();
+  } else if (t === 'export.completed') {
+    // 只对这一轮新发生的拼接提示(SSE 回放旧事件不弹)
+    const age = Date.now() / 1000 - Number(evt.timestamp || 0);
+    if (age >= 0 && age < 120) toast('完整成片已拼接完成,可在「剪辑」步查看', 'ok');
+    refreshQuiet();
+  } else if (['step.completed', 'run.failed', 'quality.evaluated',
+              'artifact.created'].includes(t)) {
     refreshQuiet();
   }
 }

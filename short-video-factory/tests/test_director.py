@@ -222,8 +222,8 @@ def test_export_concat_subtitles(env, monkeypatch):
     accept_shot(store, asset_store, pid, make_shot(store, pid, "", 6, 1))
 
     calls: list = []
-    monkeypatch.setattr("svf.apps.api.app.subprocess.run", fake_ffmpeg_run(calls))
-    monkeypatch.setattr("svf.apps.api.app.shutil.which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("svf.workers.compose.subprocess.run", fake_ffmpeg_run(calls))
+    monkeypatch.setattr("svf.workers.compose.shutil.which", lambda name: "/usr/bin/ffmpeg")
 
     r = client.post(f"/projects/{pid}/export", json={"subtitles": True})
     assert r.status_code == 200, r.text
@@ -242,8 +242,8 @@ def test_export_concat_fast_path(env, monkeypatch):
     accept_shot(store, asset_store, pid, make_shot(store, pid, "", 5, 0))
 
     calls: list = []
-    monkeypatch.setattr("svf.apps.api.app.subprocess.run", fake_ffmpeg_run(calls))
-    monkeypatch.setattr("svf.apps.api.app.shutil.which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("svf.workers.compose.subprocess.run", fake_ffmpeg_run(calls))
+    monkeypatch.setattr("svf.workers.compose.shutil.which", lambda name: "/usr/bin/ffmpeg")
 
     # 无台词：默认 subtitles=True 也走 -c copy 快路径；不传 body 也行
     r = client.post(f"/projects/{pid}/export")

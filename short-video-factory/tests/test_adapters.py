@@ -97,7 +97,9 @@ class TestLocalAssetStore(unittest.TestCase):
 
 class TestChatJson(unittest.TestCase):
     def setUp(self):
-        self.client = TextModelClient(base="http://x/v1", model="m")
+        # 显式选无密钥 provider:测试不依赖本地 .env(DEEPSEEK_API_KEY)
+        self.client = TextModelClient(provider="ollama",
+                                      base="http://x/v1", model="m")
 
     def test_extract_json_with_prose(self):
         out = extract_json('Sure! Here is it: {"a": 1, "b": {"c": 2}} hope that helps')

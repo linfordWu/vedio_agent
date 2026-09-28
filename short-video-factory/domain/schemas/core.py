@@ -123,6 +123,9 @@ class ShotSpec(BaseModel):
     #  "end_state": "在木桌中央且双手离开"}
     # 渲染提示词与视觉评审共用，防止数量复制/悬浮/初末态混帧。
     object_states: list[dict[str, Any]] = Field(default_factory=list)
+    # 光线与调色板（渲染提示词 LIGHTING & PALETTE 段;导演拆镜时填写,
+    # 如「低调工业光,地面霓虹灯管,深黑+电蓝+品红」),空串则该段省略。
+    lighting_palette: str = ""
     observed_end_state: str = ""    # 验收时由评审写回的实际末态（供下一镜接续）
     felt_intent: str = ""           # 内部意图，不进提示词
     extension_depth: int = 0        # 链式续拍深度
@@ -156,6 +159,15 @@ class Project(BaseModel):
     # 项目级画幅锁：所有镜头强制使用该画幅,不信任 LLM 逐镜给出的值,
     # 否则同一项目会混出竖屏镜头,导出后播放器中段切换横竖屏。
     aspect_ratio: str = "16:9"
+    # 一键出片/一键成片：全部镜头验收后自动拼接成完整成片(手动项目为 False)。
+    auto_compose: bool = False
+    # 一键出片的「素材后确认」模式:定妆/场景参考图/首帧生成完先暂停,
+    # 用户确认后才渲染镜头并自动拼接;False=全自动。
+    confirm_after_assets: bool = False
+    # 一键出片的材料来源(md/txt/docx 上传):只存名称与资产 id,
+    # 原文落在资产库里,避免项目列表被长文本撑大。
+    source_material_name: str = ""
+    source_material_asset_id: str = ""
     created_at: float = Field(default_factory=now_ts)
 
 

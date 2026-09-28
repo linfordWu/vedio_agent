@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from svf.apps.api.app import create_app  # noqa: E402
 from svf.domain.repositories.store import Store  # noqa: E402
-from svf.domain.schemas.core import Asset, DecisionAdvice, ScoreReport  # noqa: E402
+from svf.domain.schemas.core import Asset, DecisionAdvice, Run, ScoreReport  # noqa: E402
 
 
 # ------------------------------------------------------------- fake adapters --
@@ -372,3 +372,200 @@ def test_upload_sha_mismatch_fails(env):
     assert r.status_code == 400
     session = store.get("uploads", uid)
     assert session.status == "FAILED"
+
+
+def test_stop_project_cancels_active_runs(tmp_path):
+    """项目级停止:在途 run 取消;列表暴露 stoppable 供前端显示停止入口。"""
+    store = Store(tmp_path / "factory.db")
+    asset_store = FakeAssetStore(tmp_path / "assets")
+    renderer = BlockingRenderer(asset_store)
+    app = create_app(store, asset_store, renderer=renderer, judge=FakeJudge(),
+                     decision=None, text_model=FakeTextModel(),
+                     data_dir=str(tmp_path / "data"),
+                     worker_poll_interval_s=0.05)
+    client = TestClient(app)
+    try:
+        pid, shot_id = plan_and_get_shot(client)
+        rid = client.post(f"/shots/{shot_id}/runs",
+                          json={"command_id": "cmd-stop"}).json()["run_id"]
+        assert renderer.started.wait(timeout=10)     # run 正在渲染
+        proj = next(p for p in client.get("/projects").json()["projects"]
+                    if p["project_id"] == pid)
+        assert proj["stoppable"] is True and proj["active_runs"] >= 1
+        r = client.post(f"/projects/{pid}/stop")
+        assert r.status_code == 202, r.text
+        renderer.release.set()
+        assert wait_for(lambda: client.get(f"/runs/{rid}").json()["run"]["state"]
+                        == "CANCELLED", timeout=15)
+        proj = next(p for p in client.get("/projects").json()["projects"]
+                    if p["project_id"] == pid)
+        assert proj["stoppable"] is False
+        types = [e["type"] for e in
+                 client.get(f"/runs/{rid}/steps").json()["steps"]]
+        assert "run.cancel_requested" in types
+    finally:
+        renderer.release.set()
+        app.state.engine.shutdown()
+        store.close()
+
+
+def test_tasks_center_and_pause(tmp_path):
+    """任务中心:阶段/进度/明细可读;暂停与恢复可用。"""
+    store = Store(tmp_path / "factory.db")
+    asset_store = FakeAssetStore(tmp_path / "assets")
+    renderer = BlockingRenderer(asset_store)
+    app = create_app(store, asset_store, renderer=renderer, judge=FakeJudge(),
+                     decision=None, text_model=FakeTextModel(),
+                     data_dir=str(tmp_path / "data"),
+                     worker_poll_interval_s=0.05)
+    client = TestClient(app)
+    try:
+        pid, shot_id = plan_and_get_shot(client)
+        rid = client.post(f"/shots/{shot_id}/runs",
+                          json={"command_id": "cmd-tasks"}).json()["run_id"]
+        assert renderer.started.wait(timeout=10)     # run 正在渲染
+        data = client.get("/tasks").json()
+        proj = next(p for p in data["projects"] if p["project_id"] == pid)
+        assert proj["stage"] == "rendering" and proj["stoppable"] is True
+        assert proj["counts"]["shots"] == 1
+        assert proj["current"]["run_id"] == rid
+        assert proj["current"]["elapsed_s"] >= 0
+        assert any(r["run_id"] == rid and r["cancellable"] for r in proj["runs"])
+        assert data["summary"]["active"] >= 1
+        # 暂停 / 恢复
+        assert client.post("/engine/pause").json()["paused"] is True
+        assert client.get("/tasks").json()["summary"]["paused"] is True
+        assert client.post("/engine/resume").json()["paused"] is False
+        assert client.get("/tasks").json()["summary"]["paused"] is False
+        renderer.release.set()
+        assert wait_for(lambda: client.get(f"/runs/{rid}").json()["run"]["state"]
+                        == "ACCEPTED", timeout=15)
+        proj = next(p for p in client.get("/tasks").json()["projects"]
+                    if p["project_id"] == pid)
+        assert proj["stage"] == "done" and proj["progress"] == 1.0
+    finally:
+        renderer.release.set()
+        app.state.engine.shutdown()
+        store.close()
+
+
+# ------------------------------------------------- repair from ASSET_READY --
+class RepairingJudge:
+    """第一次评审要求修复(失效点 ASSET_READY),之后接受。"""
+
+    def __init__(self):
+        self.calls = 0
+
+    def score_video(self, video_key, spec):
+        self.calls += 1
+        if self.calls == 1:
+            return ScoreReport(run_id="?", verdict="repair",
+                               scores={"overall": 0.4})
+        return ScoreReport(run_id="?", verdict="accept",
+                           scores={"overall": 0.9})
+
+
+class RepairTextModel(FakeTextModel):
+    """修复 agent 返回 invalidate_from=ASSET_READY(生成模式最容易卡死的点)。"""
+
+    def chat_json(self, instructions, payload, schema_hint, max_tokens=2048):
+        if "invalidate_from" in schema_hint:
+            return {"target": "reference_assets", "action": "regenerate_video",
+                    "detail": "资产级修复", "invalidate_from": "ASSET_READY"}
+        return super().chat_json(instructions, payload, schema_hint, max_tokens)
+
+
+def test_repair_from_asset_ready_requeues(tmp_path):
+    """修复失效点=ASSET_READY 的生成 run 不能卡死:自动续到 QUEUED 并重渲染。"""
+    store = Store(tmp_path / "factory.db")
+    asset_store = FakeAssetStore(tmp_path / "assets")
+    renderer = FakeRenderer(asset_store)
+    app = create_app(store, asset_store, renderer=renderer,
+                     judge=RepairingJudge(), decision=None,
+                     text_model=RepairTextModel(),
+                     data_dir=str(tmp_path / "data"),
+                     worker_poll_interval_s=0.05)
+    client = TestClient(app)
+    try:
+        pid, shot_id = plan_and_get_shot(client)
+        r = client.post(f"/shots/{shot_id}/runs", json={"command_id": "cmd-repair"})
+        rid = r.json()["run_id"]
+        assert wait_for(lambda: client.get(f"/runs/{rid}").json()["run"]["state"]
+                        == "ACCEPTED", timeout=30)
+        assert renderer.render_calls == 2          # 修复后确实重渲染一次
+        final = client.get(f"/runs/{rid}").json()["run"]
+        assert final["seed"] != 2026               # 修复换了种子,避免缓存出同一条
+        types = [e["type"] for e
+                 in client.get(f"/runs/{rid}/steps").json()["steps"]]
+        assert types.count("run.repairing") == 1
+        assert types.count("step.queued") >= 2
+    finally:
+        app.state.engine.shutdown()
+        store.close()
+
+
+# ------------------------------------------ 删除项目/启动自愈:不留僵尸任务 --
+class InterruptRecordingRenderer(BlockingRenderer):
+    """记录 interrupt 调用,并让阻塞中的渲染立即结束(模拟 ComfyUI interrupt)。"""
+
+    def __init__(self, asset_store):
+        super().__init__(asset_store)
+        self.interrupted = threading.Event()
+
+    def interrupt(self):
+        self.interrupted.set()
+        self.release.set()
+
+
+def test_delete_project_stops_active_runs(tmp_path):
+    """删除项目:取消在途 run + 打断渲染,不留继续吃 GPU 的僵尸任务。"""
+    store = Store(tmp_path / "factory.db")
+    asset_store = FakeAssetStore(tmp_path / "assets")
+    renderer = InterruptRecordingRenderer(asset_store)
+    app = create_app(store, asset_store, renderer=renderer, judge=FakeJudge(),
+                     decision=None, text_model=FakeTextModel(),
+                     data_dir=str(tmp_path / "data"),
+                     worker_poll_interval_s=0.05)
+    client = TestClient(app)
+    try:
+        pid, shot_id = plan_and_get_shot(client)
+        rid = client.post(f"/shots/{shot_id}/runs",
+                          json={"command_id": "cmd-del"}).json()["run_id"]
+        assert renderer.started.wait(timeout=10)     # run 正在渲染
+        r = client.delete(f"/projects/{pid}")
+        assert r.status_code == 200, r.text
+        assert r.json()["removed"]["cancelled_runs"] == [rid]
+        assert renderer.interrupted.wait(timeout=5)  # 渲染被主动打断
+        assert store.get("projects", pid) is None
+        # run 记录已随项目删除;引擎不会把它复活
+        assert wait_for(lambda: store.get("runs", rid) is None, timeout=10)
+        time.sleep(0.3)
+        assert store.get("runs", rid) is None
+    finally:
+        renderer.release.set()
+        app.state.engine.shutdown()
+        store.close()
+
+
+def test_startup_cancels_orphan_runs(tmp_path):
+    """启动自愈:项目已删除但 run 还活着的僵尸任务会被取消。"""
+    db = tmp_path / "factory.db"
+    store = Store(db)
+    orphan = Run(shot_id="shot_gone", project_id="p_gone", state="QUEUED")
+    store.put("runs", orphan)
+    store.close()
+
+    store = Store(db)
+    asset_store = FakeAssetStore(tmp_path / "assets")
+    app = create_app(store, asset_store, renderer=FakeRenderer(asset_store),
+                     judge=FakeJudge(), text_model=None,
+                     data_dir=str(tmp_path / "data"),
+                     worker_poll_interval_s=0.05)
+    client = TestClient(app)
+    try:
+        assert wait_for(lambda: store.get("runs", orphan.run_id)
+                        and store.get("runs", orphan.run_id).state == "CANCELLED",
+                        timeout=15)
+    finally:
+        app.state.engine.shutdown()
+        store.close()

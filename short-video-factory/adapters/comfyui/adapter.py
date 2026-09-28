@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import mimetypes
 import subprocess
 import tempfile
@@ -23,6 +24,8 @@ from typing import Optional
 from ...config import settings
 from ..contracts import ProgressFn
 from ..asset_store.local import FFMPEG
+
+log = logging.getLogger(__name__)
 
 ASPECT_SIZES = {
     "9:16": (1024, 1792),
@@ -167,6 +170,18 @@ class H3ComfyRenderer:
         self.workflow_path = Path(workflow_path or settings.H3_SHOT_WORKFLOW)
         self.timeout_s = float(timeout_s or settings.RENDER_TIMEOUT_S)
         self.project_id = project_id
+
+    def interrupt(self) -> None:
+        """打断 ComfyUI 当前正在执行的任务。
+
+        停止/删除项目时调用,避免已取消的任务继续占用 GPU(客户端已死、
+        ComfyUI 服务端仍会把它跑完)。
+        """
+        try:
+            _http_json(self.base, "POST", "/interrupt", {}, timeout=5.0)
+            log.info("comfy interrupt sent to %s", self.base)
+        except Exception:
+            log.warning("comfy interrupt failed", exc_info=True)
 
     def _project_id(self, ref_image_keys: list[str]) -> str:
         # storage_key is {project_id}/{asset_id}/{filename}

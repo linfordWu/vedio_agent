@@ -54,6 +54,34 @@ def constrained_acceptance(acceptance: Acceptance | None = None) -> Acceptance:
                       rubric_version=acceptance.rubric_version)
 
 
+def plan_limits(duration_target_s: int) -> tuple[int, int]:
+    """结构化方案的数量上限 (场次, 镜头)：按时长推导。
+
+    既防 LLM 超发（提示词约束是软性的），也防外部接口塞入超大方案。
+    上限只防失控,不替代规划:典型 10-180 秒短剧远达不到上限。
+    """
+    target = max(10, int(duration_target_s or 60))
+    return (max(4, min(60, -(-target // 5))),
+            max(3, min(160, -(-target // 4))))
+
+
+def normalize_durations(durations: list[int], target: int,
+                        low: int = 3, high: int = 8,
+                        threshold: float = 0.15) -> list[int]:
+    """全片时长归一化：偏差超过 threshold 时按比例缩放，单镜钳制 [low, high]。
+
+    渲染器单镜时长有限（H3 4-8 秒），规划链路的软约束挡不住 LLM 超发，
+    这里做确定性收敛。对话方案预览与最终落库共用本函数，保证所见即所得。
+    """
+    total = sum(int(d or 0) for d in durations)
+    if not durations or total <= 0 or target <= 0 \
+            or abs(total - target) / target <= threshold:
+        return [int(d or low) for d in durations]
+    scale = target / total
+    return [max(low, min(high, round(int(d or low) * scale)))
+            for d in durations]
+
+
 def locked_visual_block(spec: ShotSpec) -> str:
     """Stable role/scene descriptions copied unchanged into every shot prompt."""
     characters: list[str] = []

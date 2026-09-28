@@ -33,6 +33,7 @@ from ..domain.schemas.core import (
 )
 from ..domain.state_machine.machine import TERMINAL
 from ..quality.checks import run_checks
+from .compose import maybe_auto_compose
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,11 @@ class CancelRequested(Exception):
 
 class StaleRun(Exception):
     """Fencing failure: state_version changed while we held the lease."""
+
+
+def next_seed(seed: int, attempt: int) -> int:
+    """修复/重试换种子：否则 ComfyUI 命中缓存，重渲染出来还是同一条。"""
+    return (int(seed or 0) + 7919 * max(1, int(attempt))) % 2_147_483_647
 
 
 class WorkerEngine:
@@ -91,6 +97,10 @@ class WorkerEngine:
     def resume_all(self) -> None:
         self._pause.clear()
 
+    @property
+    def paused(self) -> bool:
+        return self._pause.is_set()
+
     def reset_retries(self, run_id: str) -> None:
         self._retries.pop(run_id, None)
 
@@ -135,6 +145,25 @@ class WorkerEngine:
                     run.run_id, "QUEUED",
                     self._ev(run, "run.requeued", "orchestrator", "retry after backoff"),
                     patch={"attempt_id": new_id("att")})
+        # rescue:生成模式的 run 不应停在 ASSET_READY(修复失效点会落在这里),
+        # 续跑到 PROMPT_READY->QUEUED;reuse 模式由下面的 work 选择正常处理
+        for run in self.store.all("runs", state="ASSET_READY"):
+            if run.run_id in self._executing or not run.repair_count:
+                continue
+            if self._is_reuse(run):
+                continue
+            try:
+                self.store.transition_run(
+                    run.run_id, "PROMPT_READY",
+                    self._ev(run, "run.invalidated", "orchestrator",
+                             "resume stuck ASSET_READY"))
+                self.store.transition_run(
+                    run.run_id, "QUEUED",
+                    self._ev(run, "step.queued", "orchestrator",
+                             "requeued from ASSET_READY"))
+            except Exception:
+                log.warning("rescue stuck run %s failed", run.run_id,
+                            exc_info=True)
         work = list(self.store.all("runs", state="QUEUED"))
         work += [r for r in self.store.all("runs", state="ASSET_READY")
                  if self._is_reuse(r)]
@@ -301,6 +330,11 @@ class WorkerEngine:
             if report.observed_end_state:
                 shot.spec.observed_end_state = report.observed_end_state
             self.store.put("shots", shot)
+            # 一键出片收尾:最后一个镜头验收后自动拼接完整成片
+            try:
+                maybe_auto_compose(self.store, self.asset_store, run.project_id)
+            except Exception:
+                log.warning("auto compose trigger failed", exc_info=True)
             return
 
         if report.verdict in ("repair", "reject") and run.repair_count < run.max_repairs:
@@ -311,7 +345,14 @@ class WorkerEngine:
             run = self._transition(
                 run, plan.invalidate_from, "run.invalidated", "orchestrator",
                 summary=f"repair: {plan.action}",
-                patch={"repair_count": run.repair_count + 1})
+                patch={"repair_count": run.repair_count + 1,
+                       "seed": next_seed(run.seed, run.repair_count + 1)})
+            if run.state == "ASSET_READY" and not self._is_reuse(run):
+                # 生成模式的修复失效点是 ASSET_READY 时,必须继续走到
+                # PROMPT_READY->QUEUED,否则 run 会卡在 ASSET_READY 等不到执行
+                run = self._transition(run, "PROMPT_READY", "run.invalidated",
+                                       "orchestrator",
+                                       summary="repair: resume from assets")
             if run.state == "PROMPT_READY":
                 self._transition(run, "QUEUED", "step.queued", "orchestrator",
                                  summary="requeued after repair")

@@ -24,6 +24,7 @@ validation/
 .venv-jev/
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 

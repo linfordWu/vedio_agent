@@ -181,6 +181,43 @@ def test_compose_prompt_observed_end_state_continuation():
     assert "开场接续" not in _compose_prompt(_project(), cur, prev_shot=prev2)
 
 
+def test_compose_prompt_director_structure():
+    """渲染提示词采用导演级分段结构:
+    Duration/Aspect/Style 头 → SCENE → SHOT → CAMERA → LIGHTING & PALETTE →
+    AVOID(不单独设 AUDIO 段,台词内嵌 SHOT,声景否定并入 AVOID)。"""
+    spec = ShotSpec(
+        shot_id="s", action="艾米把餐盘端到桌上", dialogue="开饭了",
+        duration_s=6, aspect_ratio="16:9",
+        characters=[{"name": "艾米", "kind": "character", "description": "黑发"},
+                    {"name": "厨房", "kind": "location", "description": "白色灶台"}],
+        camera={"shot": "medium", "movement": "dolly-in"},
+        lighting_palette="清晨冷色自然光,左侧窗户,白+原木色",
+        reference_assets=["asset_1"])
+    prompt = _compose_prompt(_project(), Shot(shot_id="s", scene_id="sc",
+                                              project_id="p", spec=spec))
+    sections = prompt.split("\n\n")
+    assert sections[0] == ("Duration: 6 seconds | Aspect ratio: 16:9 | "
+                           "Style: 写实")
+    assert sections[1].startswith("SCENE ")
+    assert any(s.startswith("SHOT ") and "<d>[Chinese] 开饭了</d>" in s
+               for s in sections)
+    assert any(s.startswith("CAMERA ") and "movement=dolly-in" in s
+               for s in sections)
+    assert any(s.startswith("LIGHTING & PALETTE 清晨冷色自然光")
+               for s in sections)
+    assert sections[-1].startswith("AVOID: ")
+    assert prompt.endswith("画面中不出现任何文字、字幕、水印、logo、标识")
+    # 无台词/无相机/无光线时:对应段省略,结构其余部分完整
+    bare = _compose_prompt(None, Shot(shot_id="s2", scene_id="sc",
+                                      project_id="p",
+                                      spec=ShotSpec(shot_id="s2", action="走近")))
+    labels = [s.split(" ", 1)[0] for s in bare.split("\n\n")]
+    assert "CAMERA" not in labels and not any(
+        s.startswith("LIGHTING") for s in bare.split("\n\n"))
+    assert bare.split("\n\n")[-1].startswith("AVOID: ")
+    assert "overall_soundscape" in bare      # 无台词声景否定并入 AVOID
+
+
 def test_density_warning_event(tmp_path):
     """超限负载 + 裸情绪词：run 创建后记 density.warning 事件，prompt 不减内容。"""
     store = Store(tmp_path / "factory.db")

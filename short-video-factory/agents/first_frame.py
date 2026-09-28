@@ -65,11 +65,13 @@ def _first_frame_prompt(style: str, shot: Shot, scene_title: str) -> str:
 
 
 def generate_shot_first_frames(store, image_model, project_id: str,
-                               style: str = "") -> dict[str, str]:
+                               style: str = "",
+                               should_stop=None) -> dict[str, str]:
     """为所有带 object_states 且尚无首帧绑定的镜头生成首帧图。
 
     返回 {shot_id: asset_id}（只含本次新生成的）。单个镜头失败只告警
     不中断其余镜头；首帧图插入 reference_assets 最前（渲染取第一张）。
+    should_stop 返回 True 时在下一个镜头前停止。
     """
     made: dict[str, str] = {}
     scene_titles = {s.scene_id: s.title
@@ -85,6 +87,10 @@ def generate_shot_first_frames(store, image_model, project_id: str,
     aspect_sizes = {"16:9": (1216, 832), "9:16": (832, 1216),
                     "1:1": (1024, 1024)}
     for shot in shots:
+        if should_stop is not None and should_stop():
+            log.info("first-frame generation stopped by request (%s)",
+                     project_id)
+            break
         try:
             width, height = aspect_sizes.get(shot.spec.aspect_ratio,
                                              (832, 1216))

@@ -40,11 +40,13 @@ def _location_prompt(style: str, ch: Character) -> str:
 
 
 def generate_character_portraits(store, image_model, project_id: str,
-                                 style: str = "") -> dict[str, str]:
+                                 style: str = "",
+                                 should_stop=None) -> dict[str, str]:
     """为项目下所有缺参考图的角色生成定妆照。
 
     返回 {character_id: asset_id}（只含本次新生成的）。任何单个角色失败
-    只告警不中断其余角色。
+    只告警不中断其余角色；should_stop 返回 True 时在下一个角色前停止
+    （项目级停止用，当前这张图会先完成）。
     """
     made: dict[str, str] = {}
     characters = [c for c in store.all("characters", project_id=project_id)
@@ -54,6 +56,9 @@ def generate_character_portraits(store, image_model, project_id: str,
 
     assets_by_key = {a.storage_key: a for a in store.all("assets")}
     for ch in characters:
+        if should_stop is not None and should_stop():
+            log.info("portrait generation stopped by request (%s)", project_id)
+            break
         try:
             out_key = f"{project_id}/cast/{ch.name}"
             storage_key = image_model.generate(
@@ -92,12 +97,14 @@ def generate_character_portraits(store, image_model, project_id: str,
 
 
 def generate_location_references(store, image_model, project_id: str,
-                                 style: str = "") -> dict[str, str]:
+                                 style: str = "",
+                                 should_stop=None) -> dict[str, str]:
     """为项目下所有缺参考图的地点(kind=location)生成场景参考图。
 
     空镜全景、横构图,锁定空间布局与光线方向;写回 character.asset_id
     并追加到引用该场景的镜头 reference_assets 末尾(首帧/定妆照保持
     最前优先级,渲染链路只取第一张)。返回 {character_id: asset_id}。
+    should_stop 返回 True 时在下一个地点前停止。
     """
     made: dict[str, str] = {}
     locations = [c for c in store.all("characters", project_id=project_id)
@@ -107,6 +114,10 @@ def generate_location_references(store, image_model, project_id: str,
 
     assets_by_key = {a.storage_key: a for a in store.all("assets")}
     for ch in locations:
+        if should_stop is not None and should_stop():
+            log.info("location reference generation stopped by request (%s)",
+                     project_id)
+            break
         try:
             out_key = f"{project_id}/location/{ch.name}"
             storage_key = image_model.generate(

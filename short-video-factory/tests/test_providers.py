@@ -76,6 +76,39 @@ class TestProviders(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self._call("kimi", self.base)
 
+    def test_deepseek_sends_bearer_and_default_model(self):
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-deepseek"}):
+            out = self._call("deepseek", self.base)
+        self.assertTrue(out["ok"])
+        self.assertEqual(StubHandler.last_headers.get("Authorization"),
+                         "Bearer sk-deepseek")
+        self.assertEqual(StubHandler.last_body["model"], "deepseek-flash")
+
+    def test_deepseek_missing_key_raises(self):
+        os.environ.pop("DEEPSEEK_API_KEY", None)
+        with self.assertRaises(RuntimeError):
+            self._call("deepseek", self.base)
+
+    def test_dotenv_loader_keeps_real_env(self):
+        import pathlib
+        import tempfile
+
+        from svf.config.settings import _load_dotenv
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / ".env"
+            path.write_text('SVF_TEST_FROM_FILE="quoted value"\n'
+                            "# comment\n\nSVF_TEST_PLAIN=plain\n",
+                            encoding="utf-8")
+            os.environ["SVF_TEST_FROM_FILE"] = "from-env"
+            try:
+                _load_dotenv(path)
+                self.assertEqual(os.environ["SVF_TEST_FROM_FILE"], "from-env")
+                self.assertEqual(os.environ["SVF_TEST_PLAIN"], "plain")
+            finally:
+                os.environ.pop("SVF_TEST_FROM_FILE", None)
+                os.environ.pop("SVF_TEST_PLAIN", None)
+
     def test_custom_provider(self):
         settings.TEXT_PROVIDERS["custom"]["base"] = self.base
         settings.TEXT_PROVIDERS["custom"]["model"] = "my-model"
