@@ -11,6 +11,7 @@ import asyncio
 import importlib
 import json
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -370,6 +371,16 @@ def _run_plan(store: Store, text_model, project: Project) -> None:
         raise   # 让 quick 编排走 quick.failed,而不是空项目静默"成功"
 
 
+def _clean_dialogue(text: str) -> str:
+    """LLM 常给台词带上引号/换行/尾标点噪声,直接进 <d> 标签会被读出来、
+    进 SRT 会被烧进字幕,统一在写提示词和字幕前清理。"""
+    t = str(text or "").strip()
+    t = t.strip('"\'“”‘’ \t\r\n')
+    # 形如 台词". / 台词"。 的尾部残留引号
+    t = re.sub(r'["\'“”‘’]+([.。!?！？])$', r'\1', t)
+    return " ".join(t.split())
+
+
 def _compose_prompt(project: Optional[Project], shot: Shot,
                     prev_shot: Optional[Shot] = None) -> str:
     spec = shot.spec
@@ -394,14 +405,15 @@ def _compose_prompt(project: Optional[Project], shot: Shot,
         value = str(motion.get(field) or "").strip()
         if value:
             parts.append(f"{label}: {value}")
-    if spec.dialogue:
+    dialogue = _clean_dialogue(spec.dialogue)
+    if dialogue:
         # H3 原生音频:参考学习视频验证过的结构化语法,
         # <d>[Chinese] ...</d> 才能产出清晰中文语音,纯文字"台词:"不行
         speaker = next((str(c.get("name") or "") for c in spec.characters
                         if c.get("kind") != "location"
                         and str(c.get("name") or "").strip()), "角色")
         parts.append(f"本镜头中{speaker}用中文普通话清晰地说:")
-        parts.append(f"<d>[Chinese] {spec.dialogue}</d>")
+        parts.append(f"<d>[Chinese] {dialogue}</d>")
         parts.append("声音清晰、稳定、贴近麦克风。除此之外只有贴合场景的轻微环境音,"
                      "没有其他人声。")
     else:
@@ -530,7 +542,7 @@ def build_srt(clips: list[dict]) -> str:
     idx = 1
     for c in clips:
         dur = float(c.get("duration_s") or 5)
-        dialogue = (c.get("dialogue") or "").strip()
+        dialogue = _clean_dialogue(c.get("dialogue"))
         if dialogue:
             blocks.append(f"{idx}\n{_srt_timestamp(t)} --> "
                           f"{_srt_timestamp(t + dur)}\n{dialogue}")
@@ -1300,7 +1312,8 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
                 clips = _unify_export_clips(ffmpeg, project, clips, unify_dir,
                                             asset_store.path_for)
                 # 有台词且要求字幕：烧录 SRT（必须重编码）；否则走 concat -c copy 快路径
-                if body.subtitles and any(c["dialogue"].strip() for c in clips):
+                if body.subtitles and any(_clean_dialogue(c["dialogue"])
+                                          for c in clips):
                     asset = _try_ffmpeg_concat_subtitles(ffmpeg, project, clips)
                     if asset is not None:
                         return {"asset": asset, "mode": "concat_subtitles",

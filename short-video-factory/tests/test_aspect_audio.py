@@ -115,6 +115,17 @@ def test_compose_prompt_dialogue_uses_h3_d_tag():
     assert "台词:" not in prompt
 
 
+def test_dialogue_quotes_stripped():
+    from svf.apps.api.app import _clean_dialogue, build_srt
+    assert _clean_dialogue('“谢谢您，外面雨太大了”') == "谢谢您，外面雨太大了"
+    assert _clean_dialogue('"慢点喝，别烫着".') == "慢点喝，别烫着."
+    assert _clean_dialogue("") == ""
+    srt = build_srt([{"dialogue": "“你好”", "duration_s": 4}])
+    assert "“" not in srt and "你好" in srt
+    prompt = _compose_prompt(None, _shot(dialogue='"明天见"'))
+    assert "<d>[Chinese] 明天见</d>" in prompt
+
+
 def test_compose_prompt_dialogue_speaker_fallback():
     prompt = _compose_prompt(None, _shot(dialogue="你好。"))
     assert "角色用中文普通话清晰地说" in prompt
