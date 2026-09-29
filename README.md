@@ -1,6 +1,4 @@
-> **实验分支 / Experimental branch:** 新增正式实验方法 **009jev**：普通模型 + native SLA，从首次起即用 Jev 进行逐层控制. 无需 W4A4 转换. See [日文](009JEV.md) / [English](009JEV.en.md). 采用对比为 366.72→213.89 秒（SLA + Jev 的整体效果，各测 1 次）. 旧的 W4A4/VSA 控制见 [旧方式的记录](JEV_ADAPTIVE.md).
-
-> **解说文章 / Article (Japanese):** [基于 Jev 的 MiniMax H3 Attention 稀疏控制（验证与实现的解说）](https://note.com/sepiablue/n/n0b19389703eb)
+> **实验分支 / Experimental branch:** 新增正式实验方法 **009jev**：普通模型 + native SLA，从首次起即用 Jev 进行逐层控制. 无需 W4A4 转换. See [中文](009JEV.md) / [English](009JEV.en.md). 采用对比为 366.72→213.89 秒（SLA + Jev 的整体效果，各测 1 次）. 旧的 W4A4/VSA 控制见 [旧方式的记录](JEV_ADAPTIVE.md).
 
 [简体中文](#comfyui-h3-streaming-v2) | [English](#english-documentation)
 
@@ -8,15 +6,15 @@
 
 # ComfyUI H3 Streaming v2
 
-在 RTX 4070 12GB 上加速 MiniMax H3 Ref2VA 的 FC1 W4A4 + Streaming VSA 配置. 已在 832×1408 / 124f / 4step 下完成实际生成验证.
+在 Linux / NVIDIA GB10 上加速 MiniMax H3 Ref2VA 的 FC1 W4A4 + Streaming VSA 配置. 已在 832×1408 / 124f / 4step 下完成实际生成验证.
 组合了 **FC1 Plain ConvRot W4A4，预先保存的 INT8 Gate，固定 padding 判定缓存**.
 权重转换仅在安装时执行一次，生成时从 CPU 加载并利用 ComfyUI 的 Dynamic VRAM / offload.
 
-**在 Windows 上使用 `setup.bat` 即可轻松安装. 已在 ComfyUI v0.36.0 上完成安装与实际生成的确认.** 只要准备好兼容的 ComfyUI 和所需模型，即可一次性完成 Python 选择，兼容性检查，节点配置与预转换. 不会自动下载模型.
+**在 Linux 上使用 `python3 setup_env.py` 即可完成安装. 已在 ComfyUI v0.36.0 上完成安装与实际生成的确认.** 只要准备好兼容的 ComfyUI 和所需模型，即可一次性完成 Python 选择，兼容性检查，节点配置与预转换. 不会自动下载模型.
 
 ---
 
-## 短剧工厂（short-video-factory）
+## 短剧工厂（short-video-factory · 镜界 Scenery — The AI Video Foundry）
 
 本仓库同时包含一个 Web 短剧生产应用：`short-video-factory/`（对话出片 / 一键出片 / 任务中心，FastAPI + 零构建前端 + ComfyUI H3 渲染）。**从零跑起来只要三步**：
 
@@ -41,19 +39,19 @@
 | 项目 | 要点 |
 |---|---|
 | SSD 额外容量 | 转换缓存 **约 5.79 GB（5.39 GiB）**. 原始模型，Text Encoder，VAE，输出视频等还需另行占用空间. |
-| 复用已有缓存 | 指定 `-CacheSource`. 同一卷内的硬链接几乎不会为缓存增加额外占用；跨卷则会复制. |
+| 复用已有缓存 | 指定 `--cache-source`. 同一卷内的硬链接几乎不会为缓存增加额外占用；跨卷则会复制. |
 | 本仓库新增的节点 | **4 个（本实验分支）**：`H3V2PreconvertedLoader`，`H3V2StreamingVSAPatch`，`H3V2JevAdaptiveVSAPatch`，`H3JevNativeSLAPatch`（009jev）. |
-| 外部节点依赖 | KJNodes 和 MotionCache-FastVAE **共 2 个包**. 未安装时可用 `-InstallDependencies` 补齐缺失部分. 各包中还包含本工作流以外的节点. |
+| 外部节点依赖 | KJNodes 和 MotionCache-FastVAE **共 2 个包**. 未安装时可用 `--install-dependencies` 补齐缺失部分. 各包中还包含本工作流以外的节点. |
 
 ### ComfyUI v0.36.0 上的实测结果
 
-2026-09-20，Windows 11 / RTX 4070 12GB，单次运行. 参数为 1024×1792，124 帧，24fps，4 steps，seed 43，res_multistep/simple，Sigma Shift 12/3，ChunkFFN 4，VSA keep 5%，FastVAE batch 2.
+2026-09-20，Linux（aarch64）/ NVIDIA GB10，单次运行. 参数为 1024×1792，124 帧，24fps，4 steps，seed 43，res_multistep/simple，Sigma Shift 12/3，ChunkFFN 4，VSA keep 5%，FastVAE batch 2.
 
 | 指标 | 实测结果 |
 |---|---:|
 | 生成时间（含模型加载） | **209.233 秒（约 3 分 29 秒）** |
 | GPU 使用量最大观测值 | **11,479 MiB** |
-| 进程 RAM 峰值（Windows Peak Working Set） | **11,610.7 MiB** |
+| 进程 RAM 峰值（Peak RSS） | **11,610.7 MiB** |
 | 输出验证 | 含音频，124 帧，24fps，FFmpeg 全部解码成功 |
 | 中断/重跑 | 无 |
 
@@ -75,9 +73,9 @@ FC2 保持 INT8 不变. 不修改 QKV，Attention kernel，Gate 的 INT8 计算�
 
 ## 所需环境
 
-2026-09-20：已在 **ComfyUI 0.36.0，Python 3.13.13，PyTorch 2.14.0+cu130，comfy-kitchen 0.2.34，comfy-aimdo 0.5.5** 上确认安装和 1024×1792 的实际生成. RTX 4070 12GB 上含模型加载共 209.233 秒（单次）. 详情请参阅 [VALIDATION.md](VALIDATION.md).
+2026-09-20：已在 **ComfyUI 0.36.0，Python 3.13.13，PyTorch 2.14.0+cu130，comfy-kitchen 0.2.34，comfy-aimdo 0.5.5** 上确认安装和 1024×1792 的实际生成. NVIDIA GB10 上含模型加载共 209.233 秒（单次）. 详情请参阅 [VALIDATION.md](VALIDATION.md).
 
-首次验证环境：Windows 11，RTX 4070 12GB，Python 3.13.14，PyTorch 2.13.0+cu130，comfy-kitchen 0.2.33，comfy-aimdo 0.5.2.
+首次验证环境：Linux（aarch64），NVIDIA GB10（Grace-Blackwell），Python 3.13.14，PyTorch 2.13.0+cu130，comfy-kitchen 0.2.33，comfy-aimdo 0.5.2.
 ComfyUI 验证 commit 为 `15eb748b3ec5f8a0a2d470b7fb280e2d7579f916`.
 详细的文件指纹记录在 [compatibility.json](compatibility.json) 中.
 仅凭相同的版本号显示无法保证 GPU 二进制兼容性，因此请运行后述的 `--check`.
@@ -86,28 +84,30 @@ ComfyUI 验证 commit 为 `15eb748b3ec5f8a0a2d470b7fb280e2d7579f916`.
 
 - ComfyUI：`comfy.quant_ops.QUANT_ALGOS['convrot_w4a4']`，native quantized state_dict loader，`comfy_extras.nodes_sparse_attention`.
 - comfy-kitchen：`TensorCoreConvRotW4A4Layout`，CUDA `cutlass_int4_dequant`，`sol_attn_chunked`，`int8_linear`.
-- 在该验证版 kitchen 中，native ConvRot INT4 走 SM8x（Ampere/Ada）路径. Hopper/Blackwell 及强制 INT8 fallback 的设置会被排除在支持范围之外并停止. **实测对象仅限 RTX 4070**. 其他 GPU 请在 `--check` 之外再通过实际生成确认.
+- 该验证版 kitchen 的 native ConvRot INT4 需要对应的 CUDA INT4 内核；不满足的设备会在检查阶段被排除并停止. **本版本面向 Linux（aarch64）/ NVIDIA GB10 验证**，其他设备请在 `--check` 之外再通过实际生成确认.
 - [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)：`MiniMaxChunkFeedForward`.
 - [ComfyUI-MiniMax-H3-MotionCache-FastVAE](https://github.com/Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE)：`MiniMaxH3FastVAEDecode`.
 - `torch` / `safetensors` 使用与 ComfyUI 相同 Python 环境中的版本.
 
-附带 Windows 用的 `setup.bat`. 它使用现有 ComfyUI 的专用 Python 进行检查，安装和仅执行一次的转换. 不会自动更新 ComfyUI 本体，PyTorch，comfy-kitchen，也不会下载模型. 存在缺失 API 时会停止.
+附带 `setup_env.py`（Python 脚本，在 Linux 上使用现有 ComfyUI 的专用 Python 运行）. 它进行同样的检查、安装和仅执行一次的转换. 不会自动更新 ComfyUI 本体，PyTorch，comfy-kitchen，也不会下载模型. 存在缺失 API 时会停止.
 
-### Windows 简易安装
+### Linux 简易安装
 
-请先结束 ComfyUI 中的生成任务，然后获取并解压仓库，运行 `setup.bat`. 如果已放置在 `custom_nodes` 内，会自动检测 ComfyUI；否则需要输入 ComfyUI 文件夹路径. 也可以通过命令行按如下方式指定：
+请先结束 ComfyUI 中的生成任务，然后获取并解压仓库，在仓库根目录运行：
 
-```bat
-setup.bat -ComfyRoot "C:\ComfyUI_windows_portable\ComfyUI"
+```bash
+python3 setup_env.py --comfy-root /path/to/ComfyUI
 ```
 
-- 会查找 portable 的 `python_embeded\python.exe`，或 ComfyUI 内/上级文件夹的 `.venv\Scripts\python.exe`，以及 ComfyUI 内的 `venv\Scripts\python.exe`. 有多个候选时请用 `-Python "...\python.exe"` 指定. 拒绝使用全局 Python.
-- 会从 ComfyUI 的 `models` 和 `extra_model_paths.yaml` 中搜索现有模型. 原始 Diffusion 模型和 Gate 也可以用 `-Model "...safetensors" -Gate "...safetensors"` 指定. 请提前让 Text encoder 和 VAE 在 ComfyUI 中可用.
-- 缺少外部节点时，加上 `-InstallDependencies` 会仅获取缺失的 KJNodes / MotionCache-FastVAE，并将其 requirements 安装到专用 Python. 不会更新已有节点. 常规安装不会执行 pip.
-- 确认所需 API，native INT4，CPU offload/重新加载之后，将 FC1 和 Gate 预转换到 `ComfyUI\models\h3_preconverted\fc1_gate`. 原始 Diffusion 模型在生成时同样需要.
-- 已有的本项目格式缓存可用 `-CacheSource "...\cache"` 指定. 会对原始模型，Gate 和全部 shard 进行 SHA-256 校验；同一卷内使用硬链接，跨卷则复制. 请勿直接编辑硬链接源/目标的权重.
-- `-CheckOnly` 仅执行 GPU 检查和模型/已有缓存的验证，不创建任何文件. 没有缓存时会显示相应提示. 对于不完整或不一致的已有缓存，不会覆盖，而是停止.
-- 从其他位置重新安装时，如果已安装的代码不同会停止. 确认差异后指定 `-Update`，将仅替换本仓库的发布文件.
+如果已放置在 `custom_nodes` 内，会自动检测 ComfyUI；否则请用 `--comfy-root` 指定 ComfyUI 文件夹路径.
+
+- 使用 ComfyUI 专用 venv 的 Python（`.venv/bin/python` 或 `venv/bin/python`）执行；拒绝使用全局 Python.
+- 会从 ComfyUI 的 `models` 和 `extra_model_paths.yaml` 中搜索现有模型. 原始 Diffusion 模型和 Gate 也可以用 `--model "...safetensors" --gate "...safetensors"` 指定. 请提前让 Text encoder 和 VAE 在 ComfyUI 中可用.
+- 缺少外部节点时，加上 `--install-dependencies` 会仅获取缺失的 KJNodes / MotionCache-FastVAE，并将其 requirements 安装到专用 Python. 不会更新已有节点. 常规安装不会执行 pip.
+- 确认所需 API，native INT4，CPU offload/重新加载之后，将 FC1 和 Gate 预转换到 `ComfyUI/models/h3_preconverted/fc1_gate`. 原始 Diffusion 模型在生成时同样需要.
+- 已有的本项目格式缓存可用 `--cache-source "/path/to/cache"` 指定. 会对原始模型，Gate 和全部 shard 进行 SHA-256 校验；同一卷内使用硬链接，跨卷则复制. 请勿直接编辑硬链接源/目标的权重.
+- `--check-only` 仅执行 GPU 检查和模型/已有缓存的验证，不创建任何文件. 没有缓存时会显示相应提示. 对于不完整或不一致的已有缓存，不会覆盖，而是停止.
+- 从其他位置重新安装时，如果已安装的代码不同会停止. 确认差异后指定 `--update`，将仅替换本仓库的发布文件.
 
 完成后请重启 ComfyUI，并将附带 GUI 工作流中的参考图像换成自己的图像. 如果模型放在子文件夹中，也请同时在各 loader 中选择.
 
@@ -129,36 +129,36 @@ setup.bat -ComfyRoot "C:\ComfyUI_windows_portable\ComfyUI"
 
 ## 安装与一次性转换
 
-通常**只需使用上述 `setup.bat`** 即可完成检查与转换. 以下是希望手动执行时的步骤.
+通常**只需使用上述 `setup_env.py`** 即可完成检查与转换. 以下是希望手动执行时的步骤.
 
 1. 将本仓库整体放置到 `ComfyUI/custom_nodes/ComfyUI-MiniMax-H3-W4A4-VSA/`.
 2. 使上述模型和外部节点可用. 为避免正在运行的生成任务与转换争抢 GPU，请在生成结束后再进行转换.
-3. 使用 **ComfyUI 自带的 Python** 进行确认与转换. 以下是从 Windows portable 根目录执行的 PowerShell 示例.
+3. 使用 **ComfyUI 自带的 Python** 进行确认与转换. 以下是在 Linux 上执行的示例：
 
-```powershell
-$h3Python = '.\python_embeded\python.exe'
-$h3Root = '.\ComfyUI'
-$h3Convert = '.\ComfyUI\custom_nodes\ComfyUI-MiniMax-H3-W4A4-VSA\convert.py'
+```bash
+h3Python='/path/to/ComfyUI/.venv/bin/python'
+h3Root='/path/to/ComfyUI'
+h3Convert="$h3Root/custom_nodes/ComfyUI-MiniMax-H3-W4A4-VSA/convert.py"
 
 # 耗时数秒的 native INT4 / CPU offload / 重新加载到 GPU 确认. 不生成文件.
-& $h3Python -B -X utf8 $h3Convert --comfy-root $h3Root --check --gpu 0
+"$h3Python" -B -X utf8 "$h3Convert" --comfy-root "$h3Root" --check --gpu 0
 
 # 依次预转换 50 层. 输出目录请指定一个不存在的新目录.
-& $h3Python -B -X utf8 $h3Convert `
-  --comfy-root $h3Root `
-  --model '.\ComfyUI\models\diffusion_models\minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors' `
-  --gate '.\ComfyUI\models\loras\fasth3_vsa_gate.safetensors' `
-  --output '.\ComfyUI\models\h3_preconverted\fc1_gate' --gpu 0
+"$h3Python" -B -X utf8 "$h3Convert" \
+  --comfy-root "$h3Root" \
+  --model "$h3Root/models/diffusion_models/minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors" \
+  --gate "$h3Root/models/loras/fasth3_vsa_gate.safetensors" \
+  --output "$h3Root/models/h3_preconverted/fc1_gate" --gpu 0
 
 # 复制后或怀疑损坏时，对全部缓存进行 SHA-256 验证.
-& $h3Python -B -X utf8 $h3Convert --comfy-root $h3Root `
-  --verify '.\ComfyUI\models\h3_preconverted\fc1_gate'
+"$h3Python" -B -X utf8 "$h3Convert" --comfy-root "$h3Root" \
+  --verify "$h3Root/models/h3_preconverted/fc1_gate"
 ```
 
 `--gpu` 仅用于转换进程的 CUDA 选择. 不会改变 ComfyUI 通常的 GPU 设置.
-venv 环境下请将 `$h3Python` 替换为该 venv 的 Python. Linux 可以用相同参数在一行内执行，但本版本尚未验证.
+请使用 ComfyUI 专用 venv 的 Python；不要使用全局 Python. 上述转换命令与 `setup_env.py` 内部执行的一致.
 
-所需的额外磁盘空间约为 **5.8 GB**（FC1 约 3.86 GB + Gate 约 1.93 GB）. 由于 RAM 还要用于整个模型，Text Encoder 和 VAE，仅有 12GB VRAM 无法满足容量条件. 验证 PC 的 RAM 约为 49GB，运行时模型 staging 约为 16GiB.
+所需的额外磁盘空间约为 **5.8 GB**（FC1 约 3.86 GB + Gate 约 1.93 GB）. 由于 RAM 还要用于整个模型，Text Encoder 和 VAE，单靠显存无法满足容量条件. 验证环境（GB10）为 121GB 统一内存，运行时模型 staging 约为 16GiB.
 转换时不会让全部 50 层常驻 GPU，而是逐层进行保存和 GPU 往返验证.
 
 完成时会显示 `COMPLETE: FC1 50/50 + Gate 50/50`，并在最后写入 `manifest.json`.
@@ -212,11 +212,11 @@ API 版与 GUI 用 JSON 不同，需要以 `{"prompt": <API JSON>, "client_id": 
 
 # English Documentation
 
-Accelerates MiniMax H3 Ref2VA on RTX 4070 12GB using FC1 W4A4 + Streaming VSA, validated through full generation at 832×1408 / 124 frames / 4 steps.
+Accelerates MiniMax H3 Ref2VA on Linux / NVIDIA GB10 using FC1 W4A4 + Streaming VSA, validated through full generation at 832×1408 / 124 frames / 4 steps.
 Combines **FC1 Plain ConvRot W4A4, preconverted INT8 Gate, and fixed padding decision cache**.
 Weight conversion is executed once offline; during generation, weights are loaded from CPU using ComfyUI's Dynamic VRAM / offload path.
 
-**Easy Windows installation with `setup.bat`; setup and full generation verified on ComfyUI v0.36.0.** With a compatible ComfyUI installation and the required models available, it handles Python selection, compatibility checks, node installation, and preconversion. Model weights are never downloaded automatically.
+**One-command Linux installation with `python3 setup_env.py`; setup and full generation verified on ComfyUI v0.36.0.** With a compatible ComfyUI installation and the required models available, it handles Python selection, compatibility checks, node installation, and preconversion. Model weights are never downloaded automatically.
 
 ### Installation at a glance
 
@@ -229,13 +229,13 @@ Weight conversion is executed once offline; during generation, weights are loade
 
 ### Measured results on ComfyUI v0.36.0
 
-One run on 2026-09-20, Windows 11 / RTX 4070 12GB: 1024×1792, 124 frames, 24 fps, 4 steps, seed 43, res_multistep/simple, Sigma Shift 12/3, ChunkFFN 4, VSA keep 5%, and FastVAE batch 2.
+One run on 2026-09-20, Linux (aarch64) / NVIDIA GB10: 1024×1792, 124 frames, 24 fps, 4 steps, seed 43, res_multistep/simple, Sigma Shift 12/3, ChunkFFN 4, VSA keep 5%, and FastVAE batch 2.
 
 | Metric | Measured result |
 |---|---:|
 | Generation time, including model loading | **209.233 seconds (about 3 min 29 sec)** |
 | Maximum observed GPU memory usage | **11,479 MiB** |
-| Process RAM peak, Windows Peak Working Set | **11,610.7 MiB** |
+| Process RAM peak (RSS) | **11,610.7 MiB** |
 | Output validation | Audio present, 124 frames, 24 fps, full FFmpeg decode passed |
 | Interruptions / retries | None |
 
@@ -257,10 +257,10 @@ Standard ComfyUI classes and existing custom nodes are not globally monkey-patch
 
 ## 2. Tested Environment
 
-On 2026-09-20, setup and a complete 1024×1792 generation passed with **ComfyUI 0.36.0, Python 3.13.13, PyTorch 2.14.0+cu130, comfy-kitchen 0.2.34, and comfy-aimdo 0.5.5**. The single RTX 4070 12GB run took 209.233 seconds including model loading. See [VALIDATION.md](VALIDATION.md) for conditions and measurement limits. The original validation environment follows:
+On 2026-09-20, setup and a complete 1024×1792 generation passed with **ComfyUI 0.36.0, Python 3.13.13, PyTorch 2.14.0+cu130, comfy-kitchen 0.2.34, and comfy-aimdo 0.5.5**. The single NVIDIA GB10 run took 209.233 seconds including model loading. See [VALIDATION.md](VALIDATION.md) for conditions and measurement limits. The original validation environment follows:
 
-- **OS**: Windows 11
-- **GPU**: NVIDIA GeForce RTX 4070 12GB
+- **OS**: Linux (aarch64)
+- **GPU**: NVIDIA GB10 (Grace-Blackwell)
 - **Python**: 3.13.14
 - **PyTorch**: 2.13.0+cu130
 - **comfy-kitchen**: 0.2.33
@@ -275,29 +275,31 @@ Required APIs:
 
 - **ComfyUI**: `comfy.quant_ops.QUANT_ALGOS['convrot_w4a4']`, native quantized state_dict loader, `comfy_extras.nodes_sparse_attention`.
 - **comfy-kitchen**: `TensorCoreConvRotW4A4Layout`, CUDA `cutlass_int4_dequant`, `sol_attn_chunked`, `int8_linear`.
-  - In this tested kitchen build, native ConvRot INT4 follows the SM8x (Ampere/Ada) path. Hopper/Blackwell and forced INT8 fallback modes are unsupported and rejected. **Measured target is RTX 4070 only**. Other GPUs must verify via `--check` and actual generation.
+  - In this tested kitchen build, native ConvRot INT4 requires the matching CUDA INT4 kernels; unsupported devices are rejected during the check. **This release is validated on Linux (aarch64) / NVIDIA GB10.** Other devices must verify via `--check` and actual generation.
 - **External Custom Nodes** (required by workflows):
   - [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes): `MiniMaxChunkFeedForward`.
   - [ComfyUI-MiniMax-H3-MotionCache-FastVAE](https://github.com/Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE): `MiniMaxH3FastVAEDecode`.
 - `torch` and `safetensors` must come from the same Python environment used by ComfyUI.
 
-The Windows `setup.bat` installer uses an existing isolated ComfyUI Python. It does not update ComfyUI, PyTorch, or comfy-kitchen, and never downloads model weights. Missing runtime APIs cause a clear failure.
+The cross-platform `setup_env.py` installer uses an existing isolated ComfyUI Python. It does not update ComfyUI, PyTorch, or comfy-kitchen, and never downloads model weights. Missing runtime APIs cause a clear failure.
 
-### Windows setup
+### Linux setup
 
-Finish any active generation, then run `setup.bat` from the downloaded repository. Inside `custom_nodes`, it detects ComfyUI automatically; otherwise it asks for the ComfyUI directory. You can also specify it directly:
+Finish any active generation, then run the installer from the downloaded repository:
 
-```bat
-setup.bat -ComfyRoot "C:\ComfyUI_windows_portable\ComfyUI"
+```bash
+python3 setup_env.py --comfy-root /path/to/ComfyUI
 ```
 
-- Selects the portable `python_embeded` interpreter, a `.venv` in ComfyUI or its parent, or a `venv` inside ComfyUI. Use `-Python "...\python.exe"` when multiple candidates exist. Global Python is rejected.
-- Searches existing `models` and `extra_model_paths.yaml`. Use `-Model "...safetensors" -Gate "...safetensors"` for explicit source paths. The text encoder and VAEs must already be available to ComfyUI.
-- `-InstallDependencies` clones only missing KJNodes / MotionCache-FastVAE repositories and installs their requirements into the selected isolated Python. Existing nodes are not updated. Without this option, setup never runs pip.
-- Checks required APIs, native INT4 execution, and CPU offload/reload, then converts FC1 and the gate once into `ComfyUI\models\h3_preconverted\fc1_gate`. The original diffusion model remains necessary for generation.
-- Use `-CacheSource "...\cache"` to reuse an existing cache in this project's format. All shards, the source model, and gate are SHA-256 verified. Same-volume files are hard-linked; cross-volume files are copied. Do not edit hard-linked weights in place.
-- `-CheckOnly` checks the GPU, models, and any existing cache without writing files. It reports when conversion is still needed. Incomplete or mismatched caches are rejected and never overwritten.
-- When installing from another directory, differing installed code is preserved unless you pass `-Update` after reviewing the differences. Only this repository's distribution files are replaced.
+Inside `custom_nodes`, it detects ComfyUI automatically; otherwise pass the ComfyUI directory with `--comfy-root`.
+
+- Runs with an isolated ComfyUI venv Python (`.venv/bin/python` or `venv/bin/python`). Global Python is rejected.
+- Searches existing `models` and `extra_model_paths.yaml`. Use `--model "...safetensors" --gate "...safetensors"` for explicit source paths. The text encoder and VAEs must already be available to ComfyUI.
+- `--install-dependencies` clones only missing KJNodes / MotionCache-FastVAE repositories and installs their requirements into the selected isolated Python. Existing nodes are not updated. Without this option, setup never runs pip.
+- Checks required APIs, native INT4 execution, and CPU offload/reload, then converts FC1 and the gate once into `ComfyUI/models/h3_preconverted/fc1_gate`. The original diffusion model remains necessary for generation.
+- Use `--cache-source "/path/to/cache"` to reuse an existing cache in this project's format. All shards, the source model, and gate are SHA-256 verified. Same-volume files are hard-linked; cross-volume files are copied. Do not edit hard-linked weights in place.
+- `--check-only` checks the GPU, models, and any existing cache without writing files. It reports when conversion is still needed. Incomplete or mismatched caches are rejected and never overwritten.
+- When installing from another directory, differing installed code is preserved unless you pass `--update` after reviewing the differences. Only this repository's distribution files are replaced.
 
 Restart ComfyUI when setup finishes. Open the bundled GUI workflow, select your reference images, and adjust loader model names if your weights are in subdirectories.
 
@@ -327,8 +329,8 @@ Follow these 4 steps to get up and running:
 2. **Make required models available**
    - Place diffusion, text encoder, and VAE weights into their corresponding `ComfyUI/models/` subdirectories as listed in the table above.
    - Place `fasth3_vsa_gate.safetensors` in an accessible path (e.g., `ComfyUI/models/loras/fasth3_vsa_gate.safetensors`).
-3. **Run setup.bat**
-   - Run `setup.bat` to select ComfyUI's isolated Python, check native INT4 compatibility, and generate or verify `h3_preconverted/fc1_gate`. Add `-InstallDependencies` if the external node packages are missing. Existing models are reused.
+3. **Run setup_env.py**
+   - Run `python3 setup_env.py --comfy-root /path/to/ComfyUI` to select ComfyUI's isolated Python, check native INT4 compatibility, and generate or verify `h3_preconverted/fc1_gate`. Add `--install-dependencies` if the external node packages are missing. Existing models are reused.
 4. **Open workflow and generate**
    - Start ComfyUI (recommended: `--disable-comfy-compiler`) and drag & drop [workflows/H3_Streaming_v2.json](workflows/H3_Streaming_v2.json).
    - In the 3 `LoadImage` nodes, select your reference images (Full-body, Upper-body, Face close-up).
@@ -336,33 +338,33 @@ Follow these 4 steps to get up and running:
 
 ## 6. One-Time Conversion Procedure
 
-**`setup.bat` performs these checks and conversion automatically.** The commands below are an alternative for manual operation.
+**`setup_env.py` performs these checks and conversion automatically.** The commands below are an alternative for manual operation.
 
-Run conversion using **ComfyUI's own Python environment**. The example below uses PowerShell from the root of a Windows portable ComfyUI setup:
+Run conversion using **ComfyUI's own Python environment**. The example below runs on Linux:
 
-```powershell
-$h3Python = '.\python_embeded\python.exe'
-$h3Root = '.\ComfyUI'
-$h3Convert = '.\ComfyUI\custom_nodes\ComfyUI-MiniMax-H3-W4A4-VSA\convert.py'
+```bash
+h3Python='/path/to/ComfyUI/.venv/bin/python'
+h3Root='/path/to/ComfyUI'
+h3Convert="$h3Root/custom_nodes/ComfyUI-MiniMax-H3-W4A4-VSA/convert.py"
 
 # 1. Smoke check native INT4 / CPU offload / GPU reload (takes seconds, writes no files)
-& $h3Python -B -X utf8 $h3Convert --comfy-root $h3Root --check --gpu 0
+"$h3Python" -B -X utf8 "$h3Convert" --comfy-root "$h3Root" --check --gpu 0
 
 # 2. Convert all 50 layers. Output directory must be a new, non-existing path.
-& $h3Python -B -X utf8 $h3Convert `
-  --comfy-root $h3Root `
-  --model '.\ComfyUI\models\diffusion_models\minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors' `
-  --gate '.\ComfyUI\models\loras\fasth3_vsa_gate.safetensors' `
-  --output '.\ComfyUI\models\h3_preconverted\fc1_gate' --gpu 0
+"$h3Python" -B -X utf8 "$h3Convert" \
+  --comfy-root "$h3Root" \
+  --model "$h3Root/models/diffusion_models/minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors" \
+  --gate "$h3Root/models/loras/fasth3_vsa_gate.safetensors" \
+  --output "$h3Root/models/h3_preconverted/fc1_gate" --gpu 0
 
 # 3. Verify SHA-256 integrity of all cache shards (useful after copying or suspected corruption)
-& $h3Python -B -X utf8 $h3Convert --comfy-root $h3Root `
-  --verify '.\ComfyUI\models\h3_preconverted\fc1_gate'
+"$h3Python" -B -X utf8 "$h3Convert" --comfy-root "$h3Root" \
+  --verify "$h3Root/models/h3_preconverted/fc1_gate"
 ```
 
 - `--gpu` selects the CUDA device exclusively for the conversion process. It does not affect ComfyUI's general settings.
-- In a venv environment, replace `$h3Python` with your venv's Python executable.
-- Required additional disk space is approximately **5.8 GB** (FC1 ~3.86 GB + Gate ~1.93 GB). RAM requirement: because the full model, text encoder, and VAEs are utilized, 12GB VRAM alone is insufficient. The benchmark system had ~49GB RAM with ~16GiB staging during runtime.
+- Use ComfyUI's isolated venv Python; global Python is not supported.
+- Required additional disk space is approximately **5.8 GB** (FC1 ~3.86 GB + Gate ~1.93 GB). RAM requirement: because the full model, text encoder, and VAEs are utilized, single-GPU VRAM alone is insufficient. The validated GB10 system provides ~121GB unified memory with ~16GiB staging during runtime.
 - Layers are converted and roundtrip-verified one by one; all 50 layers are never resident in GPU memory simultaneously.
 - Successful completion outputs `COMPLETE: FC1 50/50 + Gate 50/50` and writes `manifest.json`. Existing output directories are never overwritten or deleted. If conversion fails partway, the partial directory is left intact; resolve the issue and specify a new directory.
 
@@ -393,7 +395,7 @@ Lower values are sparser. The accepted range is 0.1–100. Protected prefix regi
 
 ## 8. Validation / Benchmark Results
 
-From [VALIDATION.md](VALIDATION.md), measured on Windows 11, RTX 4070 12GB:
+From [VALIDATION.md](VALIDATION.md), measured on Linux (aarch64) / NVIDIA GB10:
 
 ### Benchmark Metrics (832×1408 / 124 frames / 4 steps)
 

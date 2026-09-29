@@ -1,4 +1,6 @@
-# Short Video Factory（短视频工厂 Agent）
+# 镜界 Scenery · Short Video Factory（短视频工厂 Agent）
+
+> **Scenery — The AI Video Foundry** · 镜界：本地部署的 AI 短剧工厂
 
 按《短视频工厂方案架构图 v3》实现：Web 优先、状态机 + 可追溯产物、Laya 本地决策辅助、
 本地模型推理（MiniMax H3 · ComfyUI / Qwen Image 2.1 / DeepSeek V4.1 Flash · Laya）。
@@ -68,7 +70,7 @@ cp .env.example .env        # 编辑 .env：填入 DEEPSEEK_API_KEY（默认 age
 
 ### 停止执行
 
-任何「一键出片 / 一键成片」项目都可随时停止：**首页项目卡、工作室顶栏、分镜页**
+任何「一键出片」项目都可随时停止：**首页项目卡、工作室顶栏、分镜页**
 都有「■ 停止」入口（仅在有生产线程或在途镜头时出现），调
 `POST /projects/{id}/stop`：
 

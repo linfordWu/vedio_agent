@@ -202,6 +202,27 @@ def _extract_docx_text(b64: str) -> str:
 
 
 # -------------------------------------------------------------------- plan --
+_MD_PREFIX_RE = re.compile(r"^[\s#>*\-–—·、.]+")
+_MD_ORDER_RE = re.compile(r"^\d+\s*[.、)）]\s*")
+
+
+def _clean_title(raw: str) -> str:
+    """材料文件名等派生的标题：去掉 Markdown 前缀/序号并压平空白。"""
+    text = _MD_PREFIX_RE.sub("", (raw or "").strip())
+    text = _MD_ORDER_RE.sub("", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _clean_material_brief(text: str) -> str:
+    """材料开头的 Markdown 标记（# 标题、- 列表等）只影响展示，去掉后再入库。"""
+    lines = (text or "").splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if lines:
+        lines[0] = _MD_PREFIX_RE.sub("", lines[0].strip())
+    return "\n".join(lines).strip()
+
+
 def _txt(value, limit: int = 2000) -> str:
     """物化字段护栏:LLM/外部方案进来的字符串统一压平并截断。"""
     return " ".join(str(value or "").split())[:limit]
@@ -1217,8 +1238,10 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
         extracted = extract_oneclick_params(text or material_text[:200])
         title = (os.path.splitext(material_name)[0].strip() if material_name
                  else "") or text[:20] or "材料短片"
+        title = _clean_title(title) or "材料短片"
+        brief = _clean_material_brief(text) if text else _clean_material_brief(material_text[:200])
         project = Project(
-            title=title[:40], brief=(text or material_text[:200]), style="",
+            title=title[:40], brief=brief, style="",
             duration_target_s=body.duration_target_s
             or extracted.get("duration_target_s") or 30,
             aspect_ratio=body.aspect_ratio
@@ -1232,7 +1255,7 @@ def create_app(store: Store, asset_store, renderer=None, judge=None,
             try:
                 asset = asset_store.save_bytes(
                     material_text.encode("utf-8"), project.project_id, "text",
-                    f"{os.path.splitext(material_name)[0] or 'material'}.txt",
+                    f"{_clean_title(os.path.splitext(material_name)[0]) or 'material'}.txt",
                     source="imported")
                 asset.status = "READY"
                 asset.category = "other"

@@ -18,7 +18,7 @@ DEPENDENCIES = {
         'https://github.com/Mozer/ComfyUI-MiniMax-H3-MotionCache-FastVAE.git',
 }
 FILES = ('__init__.py', 'nodes.py', 'cache.py', 'streaming.py', 'convert.py',
-         'setup.bat', 'setup.ps1', 'setup_env.py', 'README.md', 'LICENSE',
+         'setup_env.py', 'README.md', 'LICENSE',
          'THIRD_PARTY_NOTICES.md', 'VALIDATION.md', 'compatibility.json', '.gitignore',
          'adaptive.py', 'av_adaptive.py', 'block_adaptive.py', 'layer_adaptive.py',
          'jev_client.py', 'laya_client.py', 'openjev_client.py', 'test_adaptive.py', 'test_laya_client.py',
@@ -70,9 +70,8 @@ def main():
         if value is not None:
             setattr(args, name, value.resolve())
     executable = Path(sys.executable).resolve()
-    embedded = any(executable.parent.glob('python*._pth'))
-    if sys.prefix == sys.base_prefix and not embedded:
-        raise RuntimeError('Refusing global Python. Select the ComfyUI venv or embedded Python.')
+    if sys.prefix == sys.base_prefix:
+        raise RuntimeError('Refusing global Python. Select the ComfyUI venv Python (e.g. .venv/bin/python).')
     if not (root / 'comfy/sd.py').is_file():
         parser.error('--comfy-root must contain comfy/sd.py')
     os.chdir(root)
@@ -96,7 +95,7 @@ def main():
         matches = list(dict.fromkeys(p.resolve() for p in matches))
         if len(matches) != 1:
             raise RuntimeError(f'Expected one local {name}, found {len(matches)}. '
-                               'Use -Model / -Gate, or configure ComfyUI extra_model_paths.yaml. '
+                               'Use --model / --gate, or configure ComfyUI extra_model_paths.yaml. '
                                'No model will be downloaded.')
         return matches[0]
 
@@ -114,13 +113,13 @@ def main():
     target = root / 'custom_nodes' / NAME
     missing = [name for name in DEPENDENCIES if not (root / 'custom_nodes' / name / '__init__.py').is_file()]
     if missing and (not args.install_dependencies or args.check_only):
-        raise RuntimeError(f'Missing custom nodes: {missing}. Install them, or rerun with -InstallDependencies.')
+        raise RuntimeError(f'Missing custom nodes: {missing}. Install them, or rerun with --install-dependencies.')
     files = distribution_files()
     if target.resolve() != HERE and target.exists() and not args.update and not args.check_only:
         conflicts = [str(p) for p in files if (target / p).exists()
                      and (target / p).read_bytes() != (HERE / p).read_bytes()]
         if conflicts:
-            raise RuntimeError(f'Installed files differ: {conflicts}. Review them, then use -Update to replace these files only.')
+            raise RuntimeError(f'Installed files differ: {conflicts}. Review them, then use --update to replace these files only.')
     cache = root / 'models/h3_preconverted/fc1_gate'
     reuse = cache if cache.exists() else args.cache_source
     if reuse:

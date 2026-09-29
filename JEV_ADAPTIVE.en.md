@@ -2,28 +2,28 @@
 
 # Experimental Jev Adaptive VSA
 
-[日语](JEV_ADAPTIVE.md)
+[简体中文](JEV_ADAPTIVE.md)
 
 Branch: `exp/jev-adaptive-vsa`. This page documents **layer_v5, four steps**. This is a reproducible experiment, not a demonstrated acceleration release: fixed5 took212.20s, layer_v5 took219.15s. The under180s/quality target remains unmet. See [results](docs/experiments/README.md).
 
 ## Setup
 
-Follow the base [README](README.md) for compatible ComfyUI, model weights, Gate weights, preconversion, KJNodes and FastVAE dependencies. Tested on Windows / RTX4070 12GB; other environments require validation. Weights and reference images are not bundled.
+Follow the base [README](README.md) for compatible ComfyUI, model weights, Gate weights, preconversion, KJNodes and FastVAE dependencies. Tested on Linux (aarch64) / NVIDIA GB10; other environments require validation. Weights and reference images are not bundled.
 
-After this branch is published, clone it with `git clone --branch exp/jev-adaptive-vsa --single-branch https://github.com/sepiablue-ai/ComfyUI-MiniMax-H3-W4A4-VSA.git`. Place one copy under custom_nodes or use this branch's setup.bat. The installer copies Jev modules, examples and docs, but does not install the optional SDK.
+After this branch is published, clone it with `git clone --branch exp/jev-adaptive-vsa --single-branch https://github.com/sepiablue-ai/ComfyUI-MiniMax-H3-W4A4-VSA.git`. Place one copy under custom_nodes or use this branch's setup_env.py installer. The installer copies Jev modules, examples and docs, but does not install the optional SDK.
 
 For adaptive mode only, create a separate SDK environment from the repository directory:
 
-```powershell
-py -3.10 -m venv .venv-jev
-& .\.venv-jev\Scripts\python.exe -m pip install -r requirements-jev.txt
+```bash
+python3 -m venv .venv-jev
+.venv-jev/bin/pip install -r requirements-jev.txt
 ```
 
-Set node900's `sdk_python` to that environment's absolute python.exe path. Blank means the ComfyUI interpreter, which will fail if the SDK is only in the separate environment. Fixed mode needs neither SDK nor API credentials. Do not install into global Python.
+Set node900's `sdk_python` to that environment's absolute python path (`.venv-jev/bin/python`). Blank means the ComfyUI interpreter, which will fail if the SDK is only in the separate environment. Fixed mode needs neither SDK nor API credentials. Do not install into global Python.
 
 ## Credentials and transmitted data
 
-Set `TYPESAFE_API_KEY` in the environment of the process that launches ComfyUI. An already-running server will not inherit a later change. Use the hidden-input PowerShell block in the [中文指南](JEV_ADAPTIVE.md#不把-api-密钥写入文件直接启动); it reads a SecureString and populates only the process environment. Never put a literal key in a workflow, script, log or commit. Remove the parent-shell variable after use with `Remove-Item Env:TYPESAFE_API_KEY`.
+Set `TYPESAFE_API_KEY` in the environment of the process that launches ComfyUI. An already-running server will not inherit a later change. In the same shell that starts ComfyUI, read it without echoing and export it: `read -r -s -p 'TypeSafe API key: ' TYPESAFE_API_KEY; echo; export TYPESAFE_API_KEY` (see the [中文指南](JEV_ADAPTIVE.md#不把-api-密钥写入文件直接启动)). Never put a literal key in a workflow, script, log or commit. Clean up with `unset TYPESAFE_API_KEY` after use.
 
 The worker does not log the key, HTTP headers or exception bodies. State sent to TypeSafe includes sampled aggregate audio/video activation statistics, sigma, layer indices, current keep ratios, and fixed experimental goals/character and speech feedback. It does not contain raw images/audio, model weights or the API key. Decision logs include statistics, responses and token usage.
 
@@ -34,13 +34,21 @@ The worker does not log the key, HTTP headers or exception bodies. State sent to
 
 These are API graphs, not drag-and-drop GUI graphs. Supply three reference images in full-body, upper-body, face order. Change LoadImage nodes901–903 or provide input/jev_reference_01.png through03.png. Verify model/cache node127, VAEs119/120 and text encoder128 against your installation. Different weights or references are not an exact reproduction of the reported run. Asset rights are separate.
 
-Submit once to an already-running dedicated ComfyUI server:
+Submit once to an already-running dedicated ComfyUI server (Python, no extra dependencies):
 
-```powershell
-$jevGraph = Get-Content -Raw -Encoding UTF8 .\examples\jev_layer_v5_4step.api.json | ConvertFrom-Json
-$jevGraph.'900'.inputs.sdk_python = (Resolve-Path .\.venv-jev\Scripts\python.exe).Path
-$jevBody = @{ prompt = $jevGraph } | ConvertTo-Json -Depth 100
-Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8188/prompt' -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($jevBody))
+```bash
+# Point node900's sdk_python at the dedicated venv and submit once
+python3 - <<'PY'
+import json, urllib.request
+with open('examples/jev_layer_v5_4step.api.json', encoding='utf-8') as f:
+    graph = json.load(f)
+graph['900']['inputs']['sdk_python'] = '/absolute/path/to/.venv-jev/bin/python'
+req = urllib.request.Request(
+    'http://127.0.0.1:8188/prompt',
+    data=json.dumps({'prompt': graph}).encode('utf-8'),
+    headers={'Content-Type': 'application/json'})
+print(urllib.request.urlopen(req).read().decode('utf-8'))
+PY
 ```
 
 Adjust the port. Retain prompt_id and wait for completion in ComfyUI. This example does not retry or poll; inspect history before resubmitting an uncertain request. Select an output folder with ComfyUI's `--output-directory`. Load the fixed example for the control. Keep references and prompt identical across both conditions.
@@ -59,6 +67,6 @@ Low budget confidence selects the cautious3.5% budget. API failure/invalid respo
 
 Legacy policies remain for investigation: gate_v1 starts/falls back10%; av_v2 starts5% and falls back10%; block_v3 can identity-skip blocks and falls back to all blocks at configured keep; layer_v4 selects each layer independently and falls back5%. block_v3 showed identity drift and is not the recommended starting point. Producer8192 did not demonstrate meaningful acceleration;16384 is untested.
 
-Run `python -B test_adaptive.py` with the ComfyUI Python that has torch. No credentials, generation or paid API calls. Optional test_sdk_transport.py additionally needs SDK/httpx2 and torch in the same test environment; it uses mocked503/timeout responses and zero remote requests, and is not a normal installation requirement.
+Run `"$COMFY_PYTHON" -B test_adaptive.py` (or `python -B test_adaptive.py`) with the ComfyUI Python that has torch. No credentials, generation or paid API calls. Optional test_sdk_transport.py additionally needs SDK/httpx2 and torch in the same test environment; it uses mocked503/timeout responses and zero remote requests, and is not a normal installation requirement.
 
 Existing GPL-3.0-only applies to code. Model weights, reference assets, generated media and service terms are separate.

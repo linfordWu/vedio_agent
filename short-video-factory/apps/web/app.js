@@ -30,10 +30,6 @@ const state = {
   exporting: false,
   // 建立片场
   nf: { genre: '都市情感', style: '写实电影感', ratio: '9:16' },
-  qkMode: 'text',
-  qkSelected: new Set(),
-  qkAssets: [],
-  qkLoaded: false,
   // 对话出片(对话 -> 结构化分镜预览 -> 一键出片)
   chat: { messages: [], busy: false, proposal: null, plan: null,
           planBusy: false, planError: '', producing: false, planToken: 0,
@@ -42,6 +38,8 @@ const state = {
   ocMode: 'auto',          // 一键出片模式: auto=全自动 / confirm=素材后确认
   ocMaterial: null,        // 一键出片上传的材料:{name, text|docxB64, chars}
   assetsView: { project: 'all', type: 'all', group: 'all' },   // 资产页筛选
+  ocCelebrated: null,     // 已放过彩带的项目(避免重复庆祝)
+  tasksStatPrev: {},      // 任务统计的上一帧数值(用于数字滚动)
   // SSE
   es: null,
   lastSeq: 0,
@@ -121,8 +119,15 @@ function fmtElapsed(ms) {
 }
 
 function parseTime(t) {
-  if (!t) return null;
-  const d = new Date(t);
+  if (!t && t !== 0) return null;
+  let v = t;
+  // API 的 created_at / started_at 是秒级 Unix 时间戳,new Date(秒) 会被当成毫秒
+  if (typeof v === 'number' && v > 0 && v < 1e12) v = v * 1000;
+  if (typeof v === 'string' && /^[0-9]+(\.[0-9]+)?$/.test(v.trim())) {
+    const n = Number(v.trim());
+    if (n > 0 && n < 1e12) v = n * 1000;
+  }
+  const d = new Date(v);
   return isNaN(d.getTime()) ? null : d.getTime();
 }
 
@@ -193,7 +198,7 @@ function openAssetPreview(assetId, title, mediaType, kind) {
   const suffix = kind === 'export' ? ' · 成片预览'
     : mediaType === 'image' ? ' · 图片预览'
       : mediaType === 'text' ? ' · 文本预览' : ' · 镜头预览';
-  $('#project-video-title').textContent = (title || '资产') + suffix;
+  $('#project-video-title').textContent = (title || '作品') + suffix;
   const url = '/assets/' + encodeURIComponent(assetId) + '/file';
   const body = $('#project-video-body');
   if (mediaType === 'image') {
@@ -439,6 +444,7 @@ function renderProjectCards() {
       openProjectVideo(btn.dataset.assetId, btn.dataset.title, btn.dataset.kind);
     });
   });
+  bindCardTilt(grid);
 }
 
 function renderHomeStudio(projects) {
@@ -540,86 +546,6 @@ $('#nf-create-btn').addEventListener('click', async () => {
   }
 });
 
-/* ---- 一键成片(建立片场页底部) ---- */
-$$('.qk-mode-pill').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    state.qkMode = btn.dataset.mode;
-    $$('.qk-mode-pill').forEach((b) => b.classList.toggle('active', b === btn));
-    renderQuickPicker();
-  });
-});
-
-async function renderQuickPicker() {
-  const box = $('#qk-picker');
-  if (state.qkMode !== 'assets') { box.classList.add('hidden'); return; }
-  box.classList.remove('hidden');
-  if (!state.qkLoaded) {
-    box.innerHTML = '<p class="empty-hint">加载素材中…</p>';
-    try {
-      const res = await api('/assets');
-      state.qkAssets = (res.assets || res || []).filter((a) => !isAudioAsset(a));
-      state.qkLoaded = true;
-    } catch (err) {
-      box.innerHTML = '<p class="empty-hint">素材加载失败:' + esc(err.message) + '</p>';
-      return;
-    }
-  }
-  if (!state.qkAssets.length) {
-    box.innerHTML = '<p class="empty-hint">还没有可用素材,可切到「文生视频」模式</p>';
-    return;
-  }
-  box.innerHTML = '<div class="quick-picker-hint">选择参考素材(可多选,已选 ' + state.qkSelected.size + ')</div>' +
-    '<div class="quick-picker-grid">' + state.qkAssets.map((a) => {
-      const id = a.asset_id || a.id;
-      const name = assetName(a);
-      const media = isVideoAsset(a)
-        ? '<video src="' + esc(assetFileUrl(a)) + '" preload="metadata" muted></video>'
-        : '<img src="' + esc(assetFileUrl(a)) + '" loading="lazy" alt="' + esc(name) + '">';
-      return '<div class="quick-pick-card' + (state.qkSelected.has(id) ? ' selected' : '') + '" data-asset-id="' + esc(id) + '">' +
-        media + '<div class="quick-pick-name">' + esc(name) + '</div></div>';
-    }).join('') + '</div>';
-  box.querySelectorAll('.quick-pick-card').forEach((card) => {
-    card.addEventListener('click', () => {
-      const id = card.dataset.assetId;
-      if (state.qkSelected.has(id)) state.qkSelected.delete(id);
-      else state.qkSelected.add(id);
-      card.classList.toggle('selected');
-      const hint = box.querySelector('.quick-picker-hint');
-      if (hint) hint.textContent = '选择参考素材(可多选,已选 ' + state.qkSelected.size + ')';
-    });
-  });
-}
-
-$('#qk-btn').addEventListener('click', async () => {
-  const brief = $('#qk-brief').value.trim();
-  if (!brief) { toast('请先描述你想要的短剧', 'err'); return; }
-  const body = {
-    title: brief.slice(0, 15),
-    brief,
-    duration_target_s: Number($('#qk-duration').value) || 60,
-    mode: state.qkMode,
-  };
-  const style = $('#qk-style').value.trim();
-  if (style) body.style = style;
-  if (state.qkMode === 'assets') body.asset_ids = Array.from(state.qkSelected);
-  const btn = $('#qk-btn');
-  btn.disabled = true;
-  btn.textContent = '创建中…';
-  try {
-    const res = await api('/projects/quick', { method: 'POST', json: body });
-    const pid = res.project_id || res.id;
-    if (!pid) throw new Error('响应中未找到 project_id');
-    toast('一键成片项目已创建:' + pid, 'ok');
-    state.qkSelected.clear();
-    $('#qk-brief').value = '';
-    go('#/studio/' + encodeURIComponent(pid) + '?step=storyboard');
-  } catch (err) {
-    toast('一键成片失败:' + err.message, 'err');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '一键成片';
-  }
-});
 
 /* ---------- 视图:对话出片 ---------- */
 const CHAT_GREETING = '你好，我是制片助理。先聊聊你想拍的短剧吧——我会顺着问几个关键问题（主角、冲突、风格…），帮你想清楚；如果你一句话就说全了，也可以直接开拍。';
@@ -695,14 +621,23 @@ function chatThinkingRow(text, who) {
     '</div></div></div>';
 }
 
-// 顶部三步进度:聊需求 → 看分镜 → 一键出片
+// 顶部三步进度:聊需求 → 看分镜 → 一键出片(圆环节点)
 function updateChatSteps() {
   const steps = $$('#chat-steps li');
   if (!steps.length) return;
   const hasPlan = !!state.chat.plan;
-  steps[0].className = 'done';
-  steps[1].className = hasPlan ? 'done' : (state.chat.planBusy ? 'on' : '');
-  steps[2].className = hasPlan ? (state.chat.producing ? 'done' : 'on') : '';
+  const states = [
+    'done',
+    hasPlan ? 'done' : (state.chat.planBusy ? 'on' : ''),
+    hasPlan ? (state.chat.producing ? 'done' : 'on') : '',
+  ];
+  steps.forEach((li, i) => {
+    li.className = states[i] || '';
+    const dot = li.querySelector('i');
+    if (dot) {
+      dot.textContent = states[i] === 'done' ? '✓' : String(i + 1).padStart(2, '0');
+    }
+  });
 }
 
 function updateChatStatus() {
@@ -861,8 +796,8 @@ function renderChatPlanError() {
     '<h3>分镜拆解失败</h3></div></div>' +
     '<p class="chat-plan-brief">' + esc(state.chat.planError) + '</p>' +
     '<div class="chat-plan-actions">' +
-      '<span class="chat-plan-hint">可以重试拆解,或直接走标准一键成片(后台自动规划)。</span>' +
-      '<button id="chat-legacy" class="btn btn-ghost btn-small">标准一键成片</button>' +
+      '<span class="chat-plan-hint">可以重试拆解,或直接走「一键出片」全自动链路(后台自动规划)。</span>' +
+      '<button id="chat-legacy" class="btn btn-ghost btn-small">一键出片（全自动）</button>' +
       '<button id="chat-replan" class="btn btn-projector">重试拆解</button>' +
     '</div></div>';
 }
@@ -968,7 +903,7 @@ async function chatProduceFromPlan() {
 }
 
 async function chatQuickFallback(proposal) {
-  // 结构化拆解失败时的兜底:标准一键成片(后台编剧→角色→导演链路)
+  // 结构化拆解失败时的兜底:一键出片全自动链路(后台编剧→角色→导演链路)
   if (!proposal || !proposal.brief || state.chat.producing) return;
   state.chat.producing = true;
   drawChatMessages();
@@ -1029,6 +964,53 @@ $('#chat-reset').addEventListener('click', () => {
   renderChatView();
 });
 
+/* ---------- 步骤流(圆环节点):任务中心与一键出片共用 ---------- */
+const STEP_FLOW = [
+  ['plan', '规划分镜'], ['cast', '定妆参考图'], ['frame', '镜头首帧'],
+  ['render', '逐镜渲染'], ['judge', '质检'], ['compose', '拼接成片'],
+];
+const STEP_STAGE_PCT = { planning: 8, preparing: 26, casting: 26, first_frame: 42,
+                         queued: 48, rendering: 48, scoring: 72, review: 72,
+                         awaiting_confirm: 65, done: 100, planned: 10, empty: 3 };
+const STEP_ACTIVE = { planning: 'plan', preparing: 'frame', casting: 'cast',
+                      first_frame: 'frame', queued: 'render', rendering: 'render',
+                      scoring: 'judge', review: 'judge' };
+
+function stepFlowState(stage, counts) {
+  const c = counts || {};
+  const doneSet = new Set();
+  if ((c.shots || 0) > 0 || ['queued', 'rendering', 'scoring', 'review',
+                             'awaiting_confirm', 'done'].includes(stage)) {
+    doneSet.add('plan');
+  }
+  if (['first_frame', 'queued', 'rendering', 'scoring', 'review',
+       'awaiting_confirm', 'done'].includes(stage)) {
+    doneSet.add('cast');
+    doneSet.add('frame');
+  }
+  if (['rendering', 'scoring', 'review', 'done'].includes(stage)) doneSet.add('render');
+  if (['scoring', 'review', 'done'].includes(stage)) doneSet.add('judge');
+  if (stage === 'done' && (c.exports || 0) > 0) doneSet.add('compose');
+  const activeName = STEP_ACTIVE[stage] || '';
+  const pct = (stage === 'rendering' && c.shots)
+    ? Math.round(48 + 24 * (c.accepted || 0) / c.shots)
+    : (STEP_STAGE_PCT[stage] || 0);
+  return { doneSet, activeName, pct };
+}
+
+function renderStepFlow(stage, counts, opts) {
+  const compact = !!(opts && opts.compact);
+  const { doneSet, activeName } = stepFlowState(stage, counts);
+  const nodes = STEP_FLOW.map(([key, label], i) => {
+    const done = doneSet.has(key);
+    const active = !done && key === activeName;
+    return '<li class="' + (done ? 'done' : active ? 'on' : '') + '">' +
+      '<span class="oc-step-dot">' + (done ? '✓' : (i + 1)) + '</span>' +
+      '<span class="oc-step-label">' + label + '</span></li>';
+  }).join('');
+  return '<ul class="step-flow' + (compact ? ' compact' : '') + '">' + nodes + '</ul>';
+}
+
 /* ---------- 视图:任务中心 #/tasks ---------- */
 const TASK_STATE = {
   PLANNED: ['st-idle', '待开始'], ASSET_READY: ['st-idle', '准备素材'],
@@ -1085,12 +1067,19 @@ function drawTasks() {
       ['已完成', sum.completed || 0, 'done'],
       ['待生成 / 空白', sum.idle || 0, ''],
     ];
+    const prevStats = state.tasksStatPrev || {};
     summaryEl.innerHTML =
       (paused ? '<div class="tasks-paused">⏸ 引擎已暂停：在途任务不再前进' +
         '<button id="tasks-resume-inline" class="btn btn-small">▶ 恢复</button></div>' : '') +
       '<div class="tasks-stats">' + stats.map(([label, n, cls]) =>
-        '<div class="tasks-stat ' + cls + '"><b>' + n + '</b><span>' + label +
+        '<div class="tasks-stat ' + cls + '"><b data-from="' +
+        (prevStats[label] || 0) + '">' + n + '</b><span>' + label +
         '</span></div>').join('') + '</div>';
+    state.tasksStatPrev = {};
+    stats.forEach(([label, n]) => { state.tasksStatPrev[label] = n; });
+    $$('#tasks-summary .tasks-stat b').forEach((el) => {
+      animateCount(el, Number(el.textContent) || 0);
+    });
   }
   const list = $('#tasks-list');
   if (!list) return;
@@ -1108,7 +1097,7 @@ function drawTasks() {
 function renderTaskProject(p) {
   const info = taskStateInfo(p.stage);
   const c = p.counts || {};
-  const pct = Math.round((p.progress || 0) * 100);
+  const flow = stepFlowState(p.stage, c);
   const busy = TASK_BUSY_STAGES.includes(p.stage);
   const currentLine = p.current
     ? '<div class="task-current">' + (busy ? '<span class="spinner"></span>' : '') +
@@ -1165,9 +1154,9 @@ function renderTaskProject(p) {
           '">■ 停止</button>' : '') +
       '</div>' +
     '</div>' +
-    '<div class="task-progress"><div class="task-progress-bar" style="width:' +
-      pct + '%"></div></div>' +
-    '<div class="task-card-stats">' + esc(stats) + '</div>' +
+    renderStepFlow(p.stage, c, { compact: true }) +
+    '<div class="task-card-stats">' + esc(stats) +
+      '<span class="task-pct">' + flow.pct + '%</span></div>' +
     currentLine +
     (runs.length ? '<details class="task-runs"><summary>任务明细（' + runs.length +
       '）</summary>' + runsHtml + '</details>' : '') +
@@ -1266,13 +1255,6 @@ $('#tasks-refresh-btn').addEventListener('click', refreshTasks);
 $('#tasks-pause-btn').addEventListener('click', (e) => tasksTogglePause(e.currentTarget));
 
 /* ---------- 视图:一键出片 #/oneclick ---------- */
-const OC_STEPS = [
-  ['plan', '规划分镜'], ['cast', '定妆参考图'], ['frame', '镜头首帧'],
-  ['render', '逐镜渲染'], ['judge', '质检'], ['compose', '拼接成片'],
-];
-const OC_STAGE_PCT = { planning: 8, preparing: 26, casting: 26, first_frame: 42,
-                       queued: 48, rendering: 48, scoring: 72, review: 72,
-                       awaiting_confirm: 65, done: 100, planned: 10, empty: 3 };
 
 function ocCnNumber(raw) {
   const D = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
@@ -1455,36 +1437,15 @@ function ocDraw(pid, proj, assets) {
   }
   const c = proj.counts || {};
   const stage = proj.stage;
-  const doneSet = new Set();
-  if (c.shots > 0 || ['queued', 'rendering', 'scoring', 'review', 'done'].includes(stage)) {
-    doneSet.add('plan');
-  }
-  if (['first_frame', 'queued', 'rendering', 'scoring', 'review',
-       'awaiting_confirm', 'done'].includes(stage)) {
-    doneSet.add('cast');
-    doneSet.add('frame');
-  }
-  if (['rendering', 'scoring', 'review', 'done'].includes(stage)) doneSet.add('render');
-  if (['scoring', 'review', 'done'].includes(stage)) doneSet.add('judge');
-  if (stage === 'done' && c.exports > 0) doneSet.add('compose');
-  const activeName = ({ planning: 'plan', preparing: 'frame', casting: 'cast',
-                        first_frame: 'frame', queued: 'render', rendering: 'render',
-                        scoring: 'judge', review: 'judge' })[stage] || '';
-  const pct = (stage === 'rendering' && c.shots)
-    ? Math.round(48 + 24 * (c.accepted || 0) / c.shots)
-    : (OC_STAGE_PCT[stage] || 0);
-  const steps = OC_STEPS.map(([key, label]) => {
-    const cls = doneSet.has(key) ? 'done' : (key === activeName ? 'on' : '');
-    return '<li class="' + cls + '"><i>' + (doneSet.has(key) ? '✓' : '') +
-      '</i><span>' + label + '</span></li>';
-  }).join('');
+  const flow = stepFlowState(stage, c);
+  const running = !!flow.activeName || (c.active || 0) > 0;
   const shotsHtml = (proj.runs || []).slice(-24).map((r) => {
     const info = taskStateInfo(r.state);
     return '<span class="oc-shot ' + info[0] + '" title="' + esc(info[1]) + '">#' +
       esc(r.shot_no || '?') + '</span>';
   }).join('');
   const current = proj.current
-    ? '<div class="oc-current">' + (activeName ? '<span class="spinner"></span>' : '') +
+    ? '<div class="oc-current">' + (flow.activeName ? '<span class="spinner"></span>' : '') +
       '<span class="oc-current-text">' + esc(proj.current.summary || proj.stage_label) +
       '</span><em>#' + esc(proj.current.shot_no || '-') + ' · 已耗时 ' +
       fmtElapsed((proj.current.elapsed_s || 0) * 1000) + '</em></div>'
@@ -1494,6 +1455,10 @@ function ocDraw(pid, proj, assets) {
       : '');
   const exportVideo = [...assets].reverse().find(
     (a) => a.source === 'derived' && isVideoAsset(a));
+  if (exportVideo && state.ocCelebrated !== pid) {
+    state.ocCelebrated = pid;
+    fireConfetti();
+  }
   let resultHtml = '';
   if (proj.awaiting_confirm) {
     const imgs = assets.filter((a) => a.media_type === 'image').slice(-12);
@@ -1545,8 +1510,10 @@ function ocDraw(pid, proj, assets) {
         '">■ 停止</button>' : '') +
       '<button class="btn btn-small oc-studio-btn" data-id="' + esc(pid) +
         '">打开工作室</button></div></div>' +
-    '<ol class="oc-steps">' + steps + '</ol>' +
-    '<div class="oc-bar"><div class="oc-bar-fill" style="width:' + pct + '%"></div></div>' +
+    renderStepFlow(stage, c) +
+    '<div class="oc-bar-row"><div class="oc-bar"><div class="oc-bar-fill' +
+      (running ? ' active' : '') + '" style="width:' + flow.pct + '%"></div></div>' +
+      '<span class="oc-bar-pct">' + flow.pct + '%</span></div>' +
     '<div class="oc-card-stats">' + esc('镜头 ' + (c.accepted || 0) + '/' + (c.shots || 0) +
       ' · 进行 ' + (c.active || 0) + ' · 排队 ' + (c.queued || 0) +
       (c.review ? ' · 待审核 ' + c.review : '') +
@@ -1652,7 +1619,7 @@ const ASSET_GROUPS = [
   ['first_frame', '🎬 镜头首帧', '关键物体初始状态'],
   ['clip', '🎞 镜头片段', '逐镜渲染 TAKE'],
   ['export', '📦 成片', '拼接输出'],
-  ['other', '🗂 其他', '未归类资产'],
+  ['other', '🗂 其他', '未归类作品'],
 ];
 const ASSET_GROUP_NAME = { material: '材料', portrait: '定妆', location: '场景',
                            first_frame: '首帧', clip: '片段', export: '成片',
@@ -1668,7 +1635,7 @@ async function refreshAssetsGallery() {
   } catch (err) {
     const list = $('#assets-list');
     if (list) {
-      list.innerHTML = '<div class="panel db-empty">资产加载失败：' +
+      list.innerHTML = '<div class="panel db-empty">作品加载失败：' +
         esc(err.message) + '</div>';
     }
     return;
@@ -1759,7 +1726,7 @@ function drawAssetsGallery() {
   if (orphans.length && view.project === 'all' &&
       (view.group === 'all' || view.group === 'clip')) {
     html += '<article class="panel asset-project asset-orphans">' +
-      '<details class="asset-orphan-details"><summary><b>已删除项目的资产（' +
+      '<details class="asset-orphan-details"><summary><b>已删除项目的作品（' +
       orphans.length + '）</b><span>项目记录已删除，文件仍保留在磁盘 · 点击展开</span>' +
       '</summary><div class="asset-grid">' +
       orphans.map((a) => renderAssetTile(a, a.group)).join('') +
@@ -1768,7 +1735,7 @@ function drawAssetsGallery() {
   const list = $('#assets-list');
   if (list) {
     list.innerHTML = html ||
-      '<div class="panel db-empty">这个筛选下还没有资产。</div>';
+      '<div class="panel db-empty">这个筛选下还没有作品。</div>';
   }
   $$('.asset-tile').forEach((el) => el.addEventListener('click', () => {
     openAssetPreview(el.dataset.asset, el.dataset.name, el.dataset.type,
@@ -1938,7 +1905,7 @@ function renderStudioShell() {
       '<div class="sidebar-perforation"></div>' +
       '<div class="sidebar-inner">' +
         '<div class="sidebar-head">' +
-          '<div class="sidebar-brand">镜界 · PRODUCTION STUDIO</div>' +
+          '<div class="sidebar-brand">SCENERY · PRODUCTION STUDIO</div>' +
           '<a href="#/" class="sidebar-back">← 返回片库</a>' +
           '<h1 class="sidebar-title">' + esc(proj.title || '(无标题)') + '</h1>' +
           '<div class="sidebar-meta">LOCAL / ' + esc(ratio) + ' / ' + esc(proj.genre || proj.style || '-') + '</div>' +
@@ -2996,7 +2963,10 @@ function handleSSEEvent(evt) {
   } else if (t === 'export.completed') {
     // 只对这一轮新发生的拼接提示(SSE 回放旧事件不弹)
     const age = Date.now() / 1000 - Number(evt.timestamp || 0);
-    if (age >= 0 && age < 120) toast('完整成片已拼接完成,可在「剪辑」步查看', 'ok');
+    if (age >= 0 && age < 120) {
+      toast('完整成片已拼接完成,可在「剪辑」步查看', 'ok');
+      fireConfetti();
+    }
     refreshQuiet();
   } else if (['step.completed', 'run.failed', 'quality.evaluated',
               'artifact.created'].includes(t)) {
@@ -3029,11 +2999,258 @@ setInterval(() => {
   $$('[data-elapsed-run]').forEach((el) => {
     const run = getRuns().find((r) => runId(r) === el.dataset.elapsedRun);
     if (!run) return;
-    const started = parseTime(run.started_at) || parseTime(run.created_at);
-    if (!started) { el.textContent = '执行中'; return; }
-    el.textContent = '已耗时 ' + fmtElapsed(Date.now() - started);
+    const state = runState(run);
+    const started = parseTime(run.started_at);
+    const since = started || parseTime(run.created_at);
+    if (state === 'QUEUED') {
+      el.textContent = since ? '排队 ' + fmtElapsed(Date.now() - since) : '排队中';
+      return;
+    }
+    if (!since) { el.textContent = '执行中'; return; }
+    el.textContent = '已耗时 ' + fmtElapsed(Date.now() - since);
   });
 }, 1000);
+
+
+/* ================= 酷炫功能:命令面板 / 强调色 / 彩带 / 3D 倾斜 / 数字滚动 ================= */
+
+/* ---- 强调色主题(珊瑚 / 青紫 / 翡翠) ---- */
+const ACCENTS = ['coral', 'violet', 'emerald'];
+
+function applyAccent(name) {
+  const accent = ACCENTS.includes(name) ? name : 'coral';
+  if (accent === 'coral') document.documentElement.removeAttribute('data-accent');
+  else document.documentElement.dataset.accent = accent;
+  try { localStorage.setItem('svf_accent', accent); } catch (err) { /* 忽略 */ }
+  $$('#accent-menu .accent-dot').forEach((dot) => {
+    dot.dataset.current = dot.dataset.accent === accent ? '1' : '';
+  });
+}
+
+function initAccent() {
+  let saved = 'coral';
+  try { saved = localStorage.getItem('svf_accent') || 'coral'; } catch (err) { /* 忽略 */ }
+  applyAccent(saved);
+  const btn = $('#accent-btn');
+  const menu = $('#accent-menu');
+  if (!btn || !menu) return;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.classList.toggle('hidden');
+  });
+  $$('#accent-menu .accent-dot').forEach((dot) => dot.addEventListener('click', () => {
+    applyAccent(dot.dataset.accent);
+    menu.classList.add('hidden');
+    toast('强调色已切换', 'ok');
+  }));
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.accent-wrap')) menu.classList.add('hidden');
+  });
+}
+
+/* ---- 命令面板(⌘K / Ctrl+K) ---- */
+const PALETTE_ACTIONS = [
+  { ico: '⌂', label: '首页', hint: '#/', run: () => go('#/') },
+  { ico: '▶', label: '一键出片', hint: '#/oneclick', run: () => go('#/oneclick') },
+  { ico: '✦', label: '对话出片', hint: '#/chat', run: () => go('#/chat') },
+  { ico: '＋', label: '创建项目', hint: '#/new', run: () => go('#/new') },
+  { ico: '▣', label: '我的项目', hint: '#/projects', run: () => go('#/projects') },
+  { ico: '◔', label: '任务中心', hint: '#/tasks', run: () => go('#/tasks') },
+  { ico: '▤', label: '作品中心', hint: '#/assets', run: () => go('#/assets') },
+  { ico: '🎨', label: '强调色:珊瑚', hint: 'accent', run: () => applyAccent('coral') },
+  { ico: '🎨', label: '强调色:青紫', hint: 'accent', run: () => applyAccent('violet') },
+  { ico: '🎨', label: '强调色:翡翠', hint: 'accent', run: () => applyAccent('emerald') },
+];
+
+const paletteState = { items: [], shown: [], active: 0 };
+
+function paletteItems() {
+  const items = PALETTE_ACTIONS.slice();
+  (state.paletteProjects || []).forEach((proj) => {
+    const pid = proj.project_id || proj.id;
+    items.push({ ico: '▣', label: proj.title || pid, hint: '打开项目',
+                 run: () => go('#/studio/' + encodeURIComponent(pid) + '?step=storyboard') });
+    if (proj.stoppable) {
+      items.push({ ico: '■', label: '停止：' + (proj.title || pid), hint: '停止执行',
+                   run: () => stopProject(pid, proj.title || '', null) });
+    }
+  });
+  return items;
+}
+
+function openPalette() {
+  const mask = $('#palette');
+  const input = $('#palette-input');
+  if (!mask || !input) return;
+  mask.classList.remove('hidden');
+  input.value = '';
+  paletteState.items = paletteItems();
+  paletteState.active = 0;
+  drawPalette('');
+  input.focus();
+  api('/projects').then((res) => {
+    state.paletteProjects = res.projects || res || [];
+    paletteState.items = paletteItems();
+    drawPalette(input.value);
+  }).catch(() => { /* 忽略 */ });
+}
+
+function closePalette() {
+  const mask = $('#palette');
+  if (mask) mask.classList.add('hidden');
+}
+
+function drawPalette(q) {
+  const list = $('#palette-list');
+  if (!list) return;
+  const query = String(q || '').trim().toLowerCase();
+  const items = paletteState.items.filter(
+    (it) => !query || (it.label + ' ' + (it.hint || '')).toLowerCase().includes(query));
+  paletteState.shown = items;
+  if (paletteState.active >= items.length) paletteState.active = 0;
+  list.innerHTML = items.length
+    ? items.map((it, i) => '<button class="palette-item' +
+        (i === paletteState.active ? ' active' : '') + '" data-i="' + i + '">' +
+        '<span class="palette-ico">' + it.ico + '</span>' + esc(it.label) +
+        '<span class="palette-hinttext">' + esc(it.hint || '') + '</span></button>').join('')
+    : '<div class="palette-empty">没有匹配项</div>';
+  $$('#palette-list .palette-item').forEach((btn) => {
+    btn.addEventListener('mousemove', () => {
+      paletteState.active = Number(btn.dataset.i);
+      $$('#palette-list .palette-item').forEach(
+        (b) => b.classList.toggle('active', b === btn));
+    });
+    btn.addEventListener('click', () => runPaletteItem(Number(btn.dataset.i)));
+  });
+}
+
+function runPaletteItem(i) {
+  const item = (paletteState.shown || [])[i];
+  closePalette();
+  if (item && item.run) item.run();
+}
+
+function initPalette() {
+  const btn = $('#palette-btn');
+  const mask = $('#palette');
+  const input = $('#palette-input');
+  if (!btn || !mask || !input) return;
+  btn.addEventListener('click', openPalette);
+  mask.addEventListener('click', (e) => { if (e.target === mask) closePalette(); });
+  input.addEventListener('input', (e) => drawPalette(e.target.value));
+  document.addEventListener('keydown', (e) => {
+    const open = !mask.classList.contains('hidden');
+    if ((e.metaKey || e.ctrlKey) && String(e.key).toLowerCase() === 'k') {
+      e.preventDefault();
+      if (open) closePalette(); else openPalette();
+      return;
+    }
+    if (!open) return;
+    if (e.key === 'Escape') { closePalette(); }
+    else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      paletteState.active = Math.min(paletteState.active + 1,
+                                     (paletteState.shown || []).length - 1);
+      drawPalette(input.value);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      paletteState.active = Math.max(paletteState.active - 1, 0);
+      drawPalette(input.value);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      runPaletteItem(paletteState.active);
+    }
+  });
+}
+
+/* ---- 成片庆祝:彩带 ---- */
+function fireConfetti() {
+  const canvas = $('#confetti');
+  if (!canvas || !canvas.getContext) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.classList.remove('hidden');
+  const colors = ['#E96F5D', '#F2A52A', '#7C6CF0', '#22D3EE', '#4FC79A'];
+  const parts = [];
+  for (let i = 0; i < 140; i += 1) {
+    parts.push({
+      x: canvas.width * (0.5 + (Math.random() - 0.5) * 0.4),
+      y: canvas.height * 0.34,
+      vx: (Math.random() - 0.5) * 15 * dpr,
+      vy: (Math.random() * -13 - 3) * dpr,
+      w: (6 + Math.random() * 7) * dpr,
+      h: (4 + Math.random() * 6) * dpr,
+      rot: Math.random() * Math.PI,
+      vr: (Math.random() - 0.5) * 0.32,
+      color: colors[(Math.random() * colors.length) | 0],
+    });
+  }
+  const t0 = performance.now();
+  function tick(now) {
+    const t = now - t0;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    parts.forEach((pc) => {
+      pc.vy += 0.32 * dpr;
+      pc.x += pc.vx; pc.y += pc.vy; pc.rot += pc.vr;
+      ctx.save();
+      ctx.translate(pc.x, pc.y);
+      ctx.rotate(pc.rot);
+      ctx.globalAlpha = Math.max(0, 1 - t / 2600);
+      ctx.fillStyle = pc.color;
+      ctx.fillRect(-pc.w / 2, -pc.h / 2, pc.w, pc.h);
+      ctx.restore();
+    });
+    if (t < 2600) requestAnimationFrame(tick);
+    else {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      canvas.classList.add('hidden');
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+/* ---- 项目卡 3D 倾斜 + 光斑跟随 ---- */
+function bindCardTilt(root) {
+  if (!window.matchMedia || !window.matchMedia('(hover: hover)').matches) return;
+  const scope = root || document;
+  scope.querySelectorAll('.db-grid .proj-card').forEach((card) => {
+    if (card.dataset.tilt) return;
+    card.dataset.tilt = '1';
+    card.addEventListener('mousemove', (e) => {
+      const r = card.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width;
+      const py = (e.clientY - r.top) / r.height;
+      card.style.setProperty('--mx', (px * 100).toFixed(1) + '%');
+      card.style.setProperty('--my', (py * 100).toFixed(1) + '%');
+      const rx = (0.5 - py) * 7;
+      const ry = (px - 0.5) * 9;
+      card.style.transform = 'perspective(900px) rotateX(' + rx.toFixed(2) +
+        'deg) rotateY(' + ry.toFixed(2) + 'deg) translateY(-2px)';
+    });
+    card.addEventListener('mouseleave', () => { card.style.transform = ''; });
+  });
+}
+
+/* ---- 数字滚动 ---- */
+function animateCount(el, to) {
+  const from = Number(el.dataset.from || 0);
+  if (!isFinite(to)) return;
+  if (from === to) { el.textContent = String(to); return; }
+  const t0 = performance.now();
+  function step(now) {
+    const k = Math.min(1, (now - t0) / 450);
+    const eased = 1 - Math.pow(1 - k, 3);
+    el.textContent = String(Math.round(from + (to - from) * eased));
+    if (k < 1) requestAnimationFrame(step);
+    else el.textContent = String(to);
+  }
+  requestAnimationFrame(step);
+}
+
+initAccent();
+initPalette();
 
 /* ---------- 启动 ---------- */
 if (!location.hash) location.hash = '#/';

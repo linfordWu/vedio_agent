@@ -1044,6 +1044,16 @@ def test_split_material_keeps_order_and_merges():
     assert split_material("", max_beats=3) == []
 
 
+def test_material_title_markdown_prefix_is_cleaned():
+    """材料文件名/正文开头的 Markdown 标记不影响项目标题与简介。"""
+    from svf.apps.api.app import _clean_material_brief, _clean_title
+    assert _clean_title("# 夏末的自动贩卖机 · 30s 日系动画") == "夏末的自动贩卖机 · 30s 日系动画"
+    assert _clean_title("1. 开场") == "开场"
+    assert _clean_title("##  ") == ""
+    assert _clean_material_brief("# 开场\n雨夜，小夏走进便利店。") == "开场\n雨夜，小夏走进便利店。"
+    assert _clean_material_brief("\n\n## 转折\n她在监控里看到自己。").startswith("转折")
+
+
 def test_oneclick_material_covers_every_beat(tmp_path):
     """上传材料:逐段覆盖(每段至少一个镜头),成片与材料一致。"""
     store = Store(tmp_path / "factory.db")
@@ -1091,6 +1101,8 @@ def test_oneclick_material_covers_every_beat(tmp_path):
         assert titles == {"开场", "转折", "结局"}
         project = store.get("projects", pid)
         assert project.source_material_name == "剧本.md"
+        assert project.title == "剧本"                       # 文件名清洗后不带扩展名
+        assert project.brief == "悬疑风格，15秒竖屏"          # 有文本时简介优先用文本
         types = [e.type for e in store.events_since(pid)]
         assert "material.split" in types
     finally:
