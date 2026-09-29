@@ -29,20 +29,20 @@ validation/
 *.key
 
 # 设计类 skill 仅本地使用,不入库(保留 learning-video)
-skills/brandkit/
-skills/brutalist-skill/
-skills/frontend-design/
-skills/gpt-tasteskill/
-skills/image-to-code-skill/
-skills/imagegen-frontend-mobile/
-skills/imagegen-frontend-web/
-skills/minimalist-skill/
-skills/output-skill/
-skills/redesign-skill/
-skills/soft-skill/
-skills/stitch-skill/
-skills/taste-skill/
-skills/taste-skill-v1/
-skills/ui-ux-pro-max/
-skills/web-design-guidelines/
-skills/llms.txt
+short-video-factory/skills/brandkit/
+short-video-factory/skills/brutalist-skill/
+short-video-factory/skills/frontend-design/
+short-video-factory/skills/gpt-tasteskill/
+short-video-factory/skills/image-to-code-skill/
+short-video-factory/skills/imagegen-frontend-mobile/
+short-video-factory/skills/imagegen-frontend-web/
+short-video-factory/skills/minimalist-skill/
+short-video-factory/skills/output-skill/
+short-video-factory/skills/redesign-skill/
+short-video-factory/skills/soft-skill/
+short-video-factory/skills/stitch-skill/
+short-video-factory/skills/taste-skill/
+short-video-factory/skills/taste-skill-v1/
+short-video-factory/skills/ui-ux-pro-max/
+short-video-factory/skills/web-design-guidelines/
+short-video-factory/skills/llms.txt

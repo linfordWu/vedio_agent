@@ -5,6 +5,17 @@
 按《短视频工厂方案架构图 v3》实现：Web 优先、状态机 + 可追溯产物、Laya 本地决策辅助、
 本地模型推理（MiniMax H3 · ComfyUI / Qwen Image 2.1 / DeepSeek V4.1 Flash · Laya）。
 
+## 仓库结构
+
+| 路径 | 内容 |
+|---|---|
+| `apps/` `agents/` `workers/` `adapters/` `domain/` `quality/` `ingestion/` `config/` | 短剧工厂代码（FastAPI + 零构建前端 + 编排/生成/质检 Worker） |
+| `comfyui-node/` | ComfyUI 自定义节点（MiniMax H3 W4A4 / Streaming VSA / 009jev），整体拷进 `custom_nodes/` 即可 |
+| `workflows/` | 工厂调用 ComfyUI 的渲染工作流 |
+| `docs/` | 部署与架构文档（`DEPLOYMENT.zh.md`、方案架构图） |
+| `skills/` | Agent 技能（短剧剧本、学习视频等） |
+| `data/` `.venv/` `.env` | 本机运行物，不入库 |
+
 ## 架构分层
 
 | 层 | 模块 |
@@ -122,7 +133,7 @@ cp .env.example .env        # 编辑 .env：填入 DEEPSEEK_API_KEY（默认 age
 
 规划链路的结构化提示词硬规则（一镜一主动作、独立次运动、四要素物体契约、
 三桶节拍、光线与调色板、台词清洗、英文否定约束等）见
-[`skills/short-drama-script/SKILL.md`](../skills/short-drama-script/SKILL.md)。
+[`skills/short-drama-script/SKILL.md`](skills/short-drama-script/SKILL.md)。
 对话路径与 `/projects/{id}/plan` 手动规划共用 `_materialize_plan` 与
 `_compose_prompt`，所以两条链路产出同样质量的 H3 渲染提示词。
 

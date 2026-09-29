@@ -53,7 +53,7 @@ overall_soundscape: 仅旁白
 
 ## 4. 批量生成脚本
 
-`gen_learning_video.py`（参考实现位于 `/home/wlf/models/`，skill 版本见 `skills/learning-video/`）：
+`gen_learning_video.py`（参考实现位于 `/home/wlf/models/`，skill 版本见 `../../skills/learning-video/`）：
 
 ```python
 CLIPS = [("doc_01.png", "旁白……", "动效脚本……"), ...]   # 每图三要素

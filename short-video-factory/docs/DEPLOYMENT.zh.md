@@ -60,17 +60,17 @@ gate 权重已备妥，容器升级支持 sm_121 的 PyTorch 后重跑 `convert.
 
 ## 4. Laya 决策引擎（默认）
 
-- **代码**：本仓库 `laya_client.py`（对 `jev_client` 的透明替换，契约一致）
+- **代码**：`comfyui-node/laya_client.py`（对 `jev_client` 的透明替换，契约一致）
 - **安装**：仓库根 `requirements.txt`（`laya>=0.3.5`），容器启动时由 entrypoint 自动安装；
   离线 wheelhouse 位于 `workspace/.wheels/`（秒装、不依赖网络）；`Dockerfile.jev` 亦内置
 - **权重**：`workspace/models/laya/`（2.3GB，[convaiinnovations/laya](https://www.modelscope.cn/models/convaiinnovations/laya)），经 folder_paths 零配置发现；也可用 `LAYA_MODEL_DIR` 显式指定
 - **关键环境变量**：`LAYA_DEVICE`（默认 cuda）、`LAYA_BATCH`（16）、`LAYA_STATE_MODE`（compact）、`LAYA_SUBFOLDER`（multilingual）
 - **性能**：GPU 上 50 问 p50 ≈ 136ms；显存不足会降级 CPU（慢 ~29 倍），注意日志告警
-- **测试**：`python3 test_laya_client.py`（16 项）
+- **测试**：`python3 comfyui-node/test_laya_client.py`（16 项）
 
 ## 5. OpenJev 决策引擎（实验，分支 exp/openjev-engine）
 
-- **代码**：本仓库 `openjev_client.py`（同一契约；OpenJev 是"一问一答"生成式模型，逐问请求 +
+- **代码**：`comfyui-node/openjev_client.py`（同一契约；OpenJev 是"一问一答"生成式模型，逐问请求 +
   状态前置 + llama-server 前缀缓存，~250ms/问）
 - **模型**：`APUS-OpenJev-v1-4B.Q6_K.gguf`（3.46GB，[ModelScope](https://www.modelscope.cn/models/prithivMLmods/APUS-OpenJev-v1-4B-GGUF)）
 - **推理服务**：宿主机运行（llama.cpp 需 CUDA sm_121 源码编译）：
@@ -81,7 +81,7 @@ llama-server -m APUS-OpenJev-v1-4B.Q6_K.gguf -ngl 99 --host 0.0.0.0 --port 8091 
 
 - **容器接入**：compose 的 comfyui 服务加 `H3_DECISION_ENGINE: "openjev"` 后 `docker compose up -d comfyui`；
   容器经 docker 网关访问宿主机（默认 `OPENJEV_URL=http://172.19.0.1:8091`）
-- **测试**：`python3 test_openjev_client.py`（11 项，stub 服务器离线可跑）
+- **测试**：`python3 comfyui-node/test_openjev_client.py`（11 项，stub 服务器离线可跑）
 
 ## 6. 项目使用
 
@@ -93,14 +93,14 @@ llama-server -m APUS-OpenJev-v1-4B.Q6_K.gguf -ngl 99 --host 0.0.0.0 --port 8091 
 | `H3V2JevAdaptiveVSAPatch` | VSA 自适应（需 W4A4 预转换管线，sm_121 暂不可用） |
 | `H3V2PreconvertedLoader` | 预转换缓存加载（同上） |
 
-### 工作流（examples/）
+### 工作流（`comfyui-node/examples/`）
 
 | 文件 | 用途 |
 |---|---|
 | `matlow_fused_4step.api.json` | 基线（无决策补丁），A/B 对照 |
 | `009jev_cold_start.api.json` | 决策引擎冷启动（推荐模板） |
 | `009jev_4step.api.json` | 带历史上下文的决策 |
-| `learning_video_1080p.api.json` | 1080P 图解动画片段（见 docs/LEARNING_VIDEO.md） |
+| `learning_video_1080p.api.json` | 1080P 图解动画片段（见 `comfyui-node/docs/LEARNING_VIDEO.md`） |
 
 ### 基准脚本（参考实现）
 
